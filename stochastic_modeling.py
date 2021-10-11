@@ -136,8 +136,15 @@ class GBMRateSeries(object):
         max_value = historical.max()
         date_min = historical.idxmin()
         min_value = historical.min()
-        
+        #######self.series[start:].plot(color=)
 
+
+#-----------------------3. Auxiliary Functions -------------------------
+def quant_5(x):
+    return x.quantile(0.05)
+
+def quant_95(x):
+    return x.quantile(0.95)
 
 
 
