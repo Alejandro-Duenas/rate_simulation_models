@@ -20,27 +20,37 @@ from dateutil.relativedelta import relativedelta
 
 #-------------------------2. Classes------------------------------------
 class GBM(object):
-    '''This objects has methods and attributes needed to simulate an 
-    stochastic process as a Geometric Brownian Motion.
+    '''This objects simulates a stochastic process as a Geometric 
+    Brownian Motion.
     '''
-    def __init__(self, s, mu, sigma, Np=1000, T=5, Nt=60):
-        """This functions initiates an instance of a GBM object.
-
+    def __init__(self, s, mu, sigma, Np=1000, T=5, Nt=60,u_bound=None,
+                 l_bound=None):
+        """
         Inputs:
         -------
         s: numerical value
             Initial value of the Geometric Brownian Motions, from which
-            the rest of the process will be simulated.
+            the rest of the process will be simulated. It is usually the
+            last observed value.
         mu: numerical value
-            Mean or shift of the stochastic process.
+            Mean or shift of the GBM stochastic process.
         sigma: numerical value
             Standard deviation or volatility of the stochastic process.
         Np: int
             Number of paths that will be simulated.
         T: numerical value 
-            Number of years or reference unit that will be simulated.
-        Nt: int
+            Number of periods (based on the time unit selected) that 
+            will be simulated.
+        Nt: integer
             Number of steps taken during T.
+        u_bound: numerical value
+            Upper bound to the simulated paths. If a value in the 
+            simulated paths take a value greater, it will be truncated
+            to this value.
+        l_bound: numerical value
+            Lower bound to the simulated paths. If a value in the 
+            simulated paths take a value lower, it will be truncated to
+            this value.
 
         Outputs:
         --------
@@ -53,6 +63,8 @@ class GBM(object):
         self.T = T
         self.Nt = Nt
         self.dt = T/Nt
+        self.u_bound = u_bound
+        self.l_bould = l_bound
         self.s_sims = self.simulate_paths()
     
     def simulate_paths(self):
@@ -67,6 +79,11 @@ class GBM(object):
         first_term = (self.mu-self.sigma**2/2)*self.dt
         s_sims = self.s*np.exp(
             (first_term+self.sigma*brownian_motion).cumsum(axis=0))
+        
+        if self.u_bound:
+            s_sims = np.where(s_sims>self.u_bound, self.u_bound, s_sims)
+        elif self.l_bould:
+            s_sims = np.where(s_sims<self.l_bould, self.l_bould, s_sims)
         return s_sims
     
 class GBMRateSeries(object):
@@ -74,15 +91,15 @@ class GBMRateSeries(object):
     and with it generates GBM simulations of the rate series. It also 
     has methods to plot historical behaviour plus its variations.
     """
-    def __init__(self, series, Np=1000, Nt=60, T=5, color_dict=None):
-        """Initiates an instance of RateSeries object.
-        
+    def __init__(self, series, Np=1000, Nt=60, T=5, color_dict=None, 
+                 u_bound=None, l_bound=None):
+        """
         Inputs:
         -------
-        series: pandas Series instance.
-            Series with the historical values of the interest variable.
-            It is supposed to have a monthly frequency. It is expected
-            that the index of the series is a date index.
+        series: pandas Series
+            Series with the historical values of the variable of 
+            interest. It is expected that the index of the series is a 
+            date index.
         """
         # Define attributes of the object
         self.series = series
@@ -107,12 +124,13 @@ class GBMRateSeries(object):
         self.Np = Np
         self.Nt = Nt
         self.T = T
+        self.u_bound = u_bound
+        self.l_bound = l_bound
 
         # Rate simulation:
         sim_df = self.simulate_rate()
         sim_df.loc[self.series.index[-1],:] = self.last
         self.sim_df = sim_df.sort_index()
-
 
     def simulate_rate(self):
         # Generate the GBM simulation for the rate
@@ -127,7 +145,9 @@ class GBMRateSeries(object):
             sigma = self.sigma,
             Np = self.Np,
             T = self.T,
-            Nt = self.Nt
+            Nt = self.Nt,
+            u_bound = self.u_bound,
+            l_bound = self.l_bound
         )
         self.dt = rate_gbm.dt
         sim_paths = rate_gbm.s_sims
@@ -251,7 +271,7 @@ class GBMRateSeries(object):
 
         dates = temp.loc[temp['Fecha']>last_date, 'Fecha']
         dist_u = 1.01
-        dist_d = 0.96
+        dist_d = 0.8
         for date in dates:
             if date.month%6 ==0:
                 temp_min = round(temp.loc[temp['Fecha']==date, 'min'].item(),dec)
@@ -299,7 +319,7 @@ class GBMRateSeries(object):
         if bottom_val<0:
             bottom_val = bottom_val*1.1
         else:
-            bottom_val = bottom_val*0.9
+            bottom_val = bottom_val*0.8
         plt.ylim(
             bottom = bottom_val, 
             top = top_val*1.1
@@ -491,13 +511,13 @@ class GBMRateSeries(object):
         )
         plt.text(
             x = start_date,
-            y = hist_max*1.01, 
+            y = prop_label(hist_max), 
             s = f"{max_date.strftime('%b-%y')}: {round(hist_max,dec)}",
             color = self.COLORS['hist_max']
         )
         plt.text(
             x = start_date,
-            y = hist_min*1.1, 
+            y = prop_label(hist_min), 
             s = f"{min_date.strftime('%b-%y')}: {round(hist_min,dec)}",
             color = self.COLORS['hist_min']
         )
@@ -587,4 +607,7 @@ def quant_5(x):
 
 def quant_95(x):
     return x.quantile(0.95)
+def prop_label(x):
+    if x<0: return 1.3*x
+    else: return 1.05*x
 
