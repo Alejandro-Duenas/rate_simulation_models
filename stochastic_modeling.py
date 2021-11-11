@@ -6,7 +6,6 @@ the Geometric Brownian Motion Monte Carlo simulation.
 '''
 
 # ------------------------1. Libraries----------------------------------
-from datetime import timedelta
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -14,7 +13,7 @@ import matplotlib as mlp
 import seaborn as sns
 import matplotlib.dates as mdates
 from matplotlib.dates import DateFormatter
-import statsmodels.api as sm
+from statsmodels.tsa.arima.model import ARIMA
 import scipy.stats as stats
 from dateutil.relativedelta import relativedelta
 
@@ -159,6 +158,8 @@ class GBMRateSeries(object):
         sim_df = self.simulate_rate()
         sim_df.loc[self.series.index[-1],:] = self.last
         self.sim_df = sim_df.sort_index()
+    def __str__(self):
+        return f'GBM {self.series.name}| Np = {self.Np}| Nt = {self.Nt}'
 
     def simulate_rate(self):
         """Simulates the rate according to the model inside the object.
@@ -183,6 +184,9 @@ class GBMRateSeries(object):
         sim_paths = rate_gbm.s_sims
         sim_df = pd.DataFrame(data=sim_paths, index=sim_date_index)
         return sim_df
+    
+    def get_simulated_df(self):
+        return self.sim_df
     
     def get_full_df(self):
         """Returns a dataframe with Np columns with the historical and
@@ -342,7 +346,7 @@ class GBMRateSeries(object):
                 )
                 plt.text(
                     x = date-relativedelta(months=month_space), 
-                    y = pos_values['quant_5']*dist_d,
+                    y = pos_values['quant_5']*dist_d*1.1,
                     s = temp_5,
                     color = self.COLORS['perc_5']
                 )
@@ -687,6 +691,104 @@ class GBMRateSeries(object):
         plt.legend()
         return fig, ax
 
+class PoissonRateSeries(GBMRateSeries):
+    def __init__(self, series, Np=1000, Nt=60, T=60, color_dict=None, 
+        u_bound=None, l_bound=None, ref_date='2011-01-01',p=2, q=4, i=0):
+        """
+        Inputs:
+        -------
+        series: pandas Series
+            Series with the historical values of the variable of 
+            interest. It is expected that the index of the series is a 
+            date index
+
+        Np: integer
+            Number of paths simulated
+
+        Nt: numerical value
+            Number of time steps taken along the simulation
+
+        T: numerical value
+            Time horizon over which the simulation will occur
+
+        color_dict: dicitonary
+            Dictionary that map the colors to the ploted lines in the
+            visualization methods. It should contain the following keys:
+
+            - hist: historical data line
+            - mean: mean of the simulated paths
+            - min: minimum value of each simulated step
+            - max: maximum value of each simulated step
+            - perc_95: 95th percentile of each simulated step
+            - perc_5: 5th percentile of each simulated step
+            - hist_min: minimum historical value
+            - hist_max: maximum historical value
+        
+        u_bound: numerical value
+            Upper bound of the simulated paths
+        
+        l_bound: numerical value 
+            Lower bound of the simulated paths
+        
+        ref_date: str (expected format '%Y-%m-%d')
+            String with the initial date of analysis to compute the 
+            parameters of the model.
+        
+        p: int
+            Number of AR lags for the ARMA model.
+        
+        q: int
+            Number of MA lags for the ARIMA model.
+        
+        i: int
+            Number of I differentiations for the ARIMA model
+        """
+        super().__init__(self, series, Np, Nt, T, color_dict, u_bound,
+            l_bound)
+        self.p = p
+        self.q = q
+        self.i = i
+        self.jump_series = series.loc[series/series.shift(1)!=1]
+        self.lmbda = self.compute_lambda()
+        self.jump_series = self.jump_series[ref_date:]
+
+    def compute_lambda(self):
+        temp_series = self.jump_series.copy().to_frame()
+        temp_series['Fecha'] = temp_series.index
+        temp_series.reset_index(drop=True, inplace=True)
+        cd = temp_series['Fecha']
+        shift_cd = cd.shift(1)
+        temp_series['delta_t'] = 12*(cd.dt.year-shift_cd.dt.year)+cd.dt.month-\
+            shift_cd.dt.month
+        temp_series = temp_series.loc[temp_series['Fecha']>='2011-01-01']
+        temp_series['class'] = temp_series['delta_t'].apply(jump_class)
+        lmbda = temp_series['class'].mean()
+        return lmbda
+
+    def simulate_rate(self):
+        trans_series = -np.log(0.15/self.jump_series-1)
+        model = ARIMA(trans_series, order=(self.p, self.i, self.q))
+        fitted = model.fit()
+        self.arima_summary = fitted.summary()
+        res_std = fitted.resid.std()
+        trans_forecast = fitted.forecast(60).reshape(60,1)
+        mc_trans_forecast = trans_forecast+np.random.normal(
+            scale = res_std*np.sqrt(12),
+            size = (60,1000)
+        )
+        mc_forecast = 0.15/(1+np.exp(-mc_trans_forecast))
+        jump_sim = (0-np.log(np.random.uniform(size=(60,1000)))/self.lmbda)\
+            .round(0).cumsum(axis=0)
+        row_index = np.where(jump_sim>=60, np.NaN, jump_sim)
+        row_index = pd.DataFrame(row_index).fillna(method='ffill').values
+        
+        mc_final = np.zeros((60,1000))
+        for i in range(1000):
+            mc_final[:,i] = mc_forecast[row_index[:,i],i]
+        mc_final
+
+        
+
 
 
 #-----------------------3. Auxiliary Functions -------------------------
@@ -711,4 +813,8 @@ def prop_label(x):
     '''
     if x<0: return 1.3*x
     else: return 1.05*x
+def jump_class(x):
+    if x >= 5: return 5
+    elif x == 0: return 1
+    else: return x
 
