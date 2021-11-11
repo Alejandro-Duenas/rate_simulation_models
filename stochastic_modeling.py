@@ -164,12 +164,14 @@ class GBMRateSeries(object):
     def simulate_rate(self):
         """Simulates the rate according to the model inside the object.
         """
-        # Generate the GBM simulation for the rate
+        # Generate tyhe date index of the simulation
         sim_date_index = pd.date_range(
             start = self.series.index[-1]+relativedelta(months=1),
             end = self.series.index[-1]+relativedelta(months=self.Nt),
-            freq='M'
+            freq = 'M'
         )
+
+        # Generate the GBM simulation for the rate
         rate_gbm = GBM(
             s = self.last,
             mu = self.mu,
@@ -309,7 +311,7 @@ class GBMRateSeries(object):
         dist_u = 1.01
         dist_d = 0.8
         for date in dates:
-            if date.month%6 ==0:
+            if date.month%6==0 and (date-last_date).days>90:
                 temp_min = round(temp.loc[temp['Fecha']==date, 'min'].item(),dec)
                 temp_max = round(temp.loc[temp['Fecha']==date, 'max'].item(),dec)
                 temp_mean = round(temp.loc[temp['Fecha']==date, 'mean'].item(),dec)
@@ -618,7 +620,7 @@ class GBMRateSeries(object):
         dist_u = 1.01
         dist_d = 0.96
         for date in dates:
-            if date.month%6 == 0:
+            if date.month%6 == 0 and (date-last_date).days>90:
                 temp_min = round(
                     full_var.loc[full_var['Fecha']==date, 'min'].item(),
                     dec
@@ -693,7 +695,7 @@ class GBMRateSeries(object):
 
 class PoissonRateSeries(GBMRateSeries):
     def __init__(self, series, Np=1000, Nt=60, T=60, color_dict=None, 
-        u_bound=None, l_bound=None, ref_date='2011-01-01',p=2, q=4, i=0):
+        u_bound=None, l_bound=None, ref_date='2011-01-01',p=4, q=4, i=0):
         """
         Inputs:
         -------
@@ -743,30 +745,48 @@ class PoissonRateSeries(GBMRateSeries):
         i: int
             Number of I differentiations for the ARIMA model
         """
-        super().__init__(self, series, Np, Nt, T, color_dict, u_bound,
-            l_bound)
+        series = series
         self.p = p
         self.q = q
         self.i = i
         self.jump_series = series.loc[series/series.shift(1)!=1]
         self.lmbda = self.compute_lambda()
         self.jump_series = self.jump_series[ref_date:]
+        super().__init__(series, Np, Nt, T, color_dict, u_bound,
+            l_bound)
+        self.series = series
+        
+    def __str__(self):
+        return f"ARIMA(p: {self.p}, i: {self.i}, q: {self.q}); "+\
+            f"Poisson dist (lambda: {self.lmbda:4.2f.}"
 
     def compute_lambda(self):
         temp_series = self.jump_series.copy().to_frame()
         temp_series['Fecha'] = temp_series.index
         temp_series.reset_index(drop=True, inplace=True)
-        cd = temp_series['Fecha']
-        shift_cd = cd.shift(1)
-        temp_series['delta_t'] = 12*(cd.dt.year-shift_cd.dt.year)+cd.dt.month-\
-            shift_cd.dt.month
+        cur_date = temp_series['Fecha']
+        shift_cd = cur_date.shift(1)
+        temp_series['delta_t'] = 12*(cur_date.dt.year-shift_cd.dt.year)+\
+            cur_date.dt.month-shift_cd.dt.month
         temp_series = temp_series.loc[temp_series['Fecha']>='2011-01-01']
-        temp_series['class'] = temp_series['delta_t'].apply(jump_class)
+        
+        temp_series['class'] = np.vectorize(jump_class)(
+            temp_series['delta_t'].values)
         lmbda = temp_series['class'].mean()
+        print(f"Lambda value = {lmbda:4.2f}")
         return lmbda
 
     def simulate_rate(self):
-        trans_series = -np.log(0.15/self.jump_series-1)
+        # Generate the date index of the simulation:
+        sim_date_index = pd.date_range(
+            start = self.series.index[-1]+relativedelta(months=1),
+            end = self.series.index[-1]+relativedelta(months=self.Nt),
+            freq = 'M'
+        )
+        # Generate an inverse sigmoid transformation of the data:
+        trans_series = -np.log(0.15/self.jump_series-1).values
+
+        # Generate the ARIMA simulation for the rate:
         model = ARIMA(trans_series, order=(self.p, self.i, self.q))
         fitted = model.fit()
         self.arima_summary = fitted.summary()
@@ -777,16 +797,191 @@ class PoissonRateSeries(GBMRateSeries):
             size = (60,1000)
         )
         mc_forecast = 0.15/(1+np.exp(-mc_trans_forecast))
+
+        # Determine the jumps in time according to Poisson distribution:
         jump_sim = (0-np.log(np.random.uniform(size=(60,1000)))/self.lmbda)\
             .round(0).cumsum(axis=0)
         row_index = np.where(jump_sim>=60, np.NaN, jump_sim)
-        row_index = pd.DataFrame(row_index).fillna(method='ffill').values
-        
+        row_index = pd.DataFrame(row_index).fillna(method='ffill').values.\
+            astype(int)
         mc_final = np.zeros((60,1000))
         for i in range(1000):
             mc_final[:,i] = mc_forecast[row_index[:,i],i]
-        mc_final
+        
+        sim_df = pd.DataFrame(data=mc_final, index=sim_date_index)
 
+        # Round to closer 0.25 multiple, with two decimals:
+        sim_df = np.round(sim_df*400, 0)/400
+        return sim_df
+    
+    def plot_full_series(self, start, end, figsize=(15,10), month_space=2,
+                         dec=1):
+        """Plots the historical and forecasted values of the analized 
+        series, with the mean, min, max, 5th and 95th percentiles of the
+        simulated steps.
+        
+        Inputs:
+        -------
+        start: string (expected format: '%Y-%m-%d')
+            String with the begining date of the plot.
+        end: string (expected format: '%Y-%m-%d')
+            String with the end date of the plot.
+        figsize: tuple
+            Tuple that determines the size of the figure generated by
+            this method.
+        month_space: int 
+            determines how many time units along the x-axis the labels
+            will be possitioned.
+        dec: int
+            Number of decimals showed in the graph. 
+        
+        Outputs:
+        --------
+        fig: matplotlib Figure
+            Figure that contains the plot
+        ax: matplotlib Axe
+            Axe in which the plot was plotted
+        """
+
+        # Prepare data to be plotted:
+        forecast = self.sim_df.agg(['min','max','mean', quant_5,
+                                    quant_95], axis=1)
+        forecast = np.round(forecast*400, 0)/400
+        forecast['Fecha'] = forecast.index
+        forecast.reset_index(drop=True, inplace=True)
+        series = self.series.to_frame()
+        last_date = series.index.max()
+        last_val = series.loc[last_date].item()
+        series_name = series.columns.item()
+        series['Fecha'] = series.index
+        series.reset_index(drop=True, inplace=True)
+        temp = series.merge(forecast, how='outer', on='Fecha')
+        
+        # Delimit the beginning and end:
+        temp = temp[(temp['Fecha']>=start) & (temp['Fecha']<=end)]
+
+        # Plot the data:
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.plot(temp['Fecha'], temp[series_name], 
+                 color=self.COLORS['hist'])
+        ax.plot(
+            temp['Fecha'], 
+            temp['quant_5'], 
+            color = self.COLORS['perc_5'],
+            linestyle = ':',
+            linewidth = 2,
+            label = 'Perc 5 - Perc 95'
+        )
+        ax.plot(
+            temp['Fecha'], 
+            temp['quant_95'], 
+            color = self.COLORS['perc_95'],
+            linestyle = ':',
+            linewidth = 2
+        )
+        ax.plot(
+            temp['Fecha'], 
+            temp['min'], 
+            color = self.COLORS['min'],
+            linestyle = '--',
+            linewidth = 2,
+            label = 'Min - Max'
+        )
+        ax.plot(
+            temp['Fecha'], 
+            temp['max'], 
+            color = self.COLORS['max'],
+            linestyle = '--',
+            linewidth = 2
+        )
+        ax.plot(
+            temp['Fecha'], 
+            temp['mean'], 
+            color = self.COLORS['mean'],
+            linewidth = 2,
+            label = 'Media'
+        )
+        # Set the axis values:
+        month_fmt = mdates.MonthLocator(interval=3)
+        ax.xaxis.set_major_locator(month_fmt)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b-%y'))
+        plt.xticks(rotation=90, ha='right')
+
+        # Give label of the last observed value:
+        d_adj = month_space+2
+        local_int = temp.loc[
+            (temp['Fecha']>=last_date-relativedelta(months=d_adj)) &
+            (temp['Fecha']<=last_date+relativedelta(months=int(1.5*d_adj))),
+            series_name
+        ]
+        plt.text(
+            x = last_date-relativedelta(months=d_adj),
+            y = local_int.max(),
+            s = round(last_val,dec),
+            color = self.COLORS['hist']
+        )
+
+        dates = temp.loc[temp['Fecha']>last_date, 'Fecha']
+        dist_u = 1.01
+        dist_d = 0.8
+        for date in dates:
+            if date.month%6==0 and (date-last_date).days>90:
+                temp_min = round(temp.loc[temp['Fecha']==date, 'min'].item(),dec)
+                temp_max = round(temp.loc[temp['Fecha']==date, 'max'].item(),dec)
+                temp_mean = round(temp.loc[temp['Fecha']==date, 'mean'].item(),dec)
+                temp_95 = round(temp.loc[temp['Fecha']==date, 'quant_95'].item(),dec)
+                temp_5 = round(temp.loc[temp['Fecha']==date, 'quant_5'].item(),dec)
+                local_int = temp.loc[
+                    (temp['Fecha']>=date-relativedelta(months=month_space)) &
+                    (temp['Fecha']<=date+relativedelta(months=int(1.5*month_space)))
+                ]
+                pos_values = local_int.max()
+                plt.text(
+                    x = date-relativedelta(months=month_space), 
+                    y = pos_values['min']*dist_d,
+                    s = temp_min,
+                    color = self.COLORS['min']
+                )
+                plt.text(
+                    x = date-relativedelta(months=month_space), 
+                    y = pos_values['max']*dist_u,
+                    s = temp_max,
+                    color = self.COLORS['max']
+                )
+                plt.text(
+                    x = date-relativedelta(months=month_space), 
+                    y = pos_values['mean']*dist_u,
+                    s = temp_mean,
+                    color = self.COLORS['mean']
+                )
+                plt.text(
+                    x = date-relativedelta(months=month_space), 
+                    y = pos_values['quant_95']*dist_u,
+                    s = temp_95,
+                    color = self.COLORS['perc_95']
+                )
+                plt.text(
+                    x = date-relativedelta(months=month_space), 
+                    y = pos_values['quant_5']*dist_d*1.1,
+                    s = temp_5,
+                    color = self.COLORS['perc_5']
+                )
+        bottom_val = temp.select_dtypes(include='float64').min().min()
+        top_val = temp.select_dtypes(include='float64').max().max()
+        if bottom_val<0:
+            bottom_val = bottom_val*1.1
+        else:
+            bottom_val = bottom_val*0.8
+        plt.ylim(
+            bottom = bottom_val, 
+            top = top_val*1.1
+        )
+        plt.xlim(
+            left = temp['Fecha'].min(), 
+            right = temp['Fecha'].max()+relativedelta(months=month_space)
+        )
+        plt.legend()
+        return fig, ax
         
 
 
