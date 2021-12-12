@@ -16,6 +16,7 @@ from matplotlib.dates import DateFormatter
 from statsmodels.tsa.arima.model import ARIMA
 import scipy.stats as stats
 from dateutil.relativedelta import relativedelta
+from typing import Union
 
 #-------------------------2. Classes------------------------------------
 class GBM(object):
@@ -745,7 +746,6 @@ class PoissonRateSeries(GBMRateSeries):
         i: int
             Number of I differentiations for the ARIMA model
         """
-        series = series
         self.p = p
         self.q = q
         self.i = i
@@ -793,7 +793,7 @@ class PoissonRateSeries(GBMRateSeries):
         res_std = fitted.resid.std()
         trans_forecast = fitted.forecast(60).reshape(60,1)
         mc_trans_forecast = trans_forecast+np.random.normal(
-            scale = res_std*np.sqrt(12),
+            scale = res_std*np.sqrt(1),
             size = (60,1000)
         )
         mc_forecast = 0.15/(1+np.exp(-mc_trans_forecast))
@@ -983,6 +983,75 @@ class PoissonRateSeries(GBMRateSeries):
         plt.legend()
         return fig, ax
         
+class VARModelSeries(GBMRateSeries):
+    """This model contains bi-varible VAR model methods and attributes
+    for the forecasting of the two variables.
+    """
+    def __init__(self, df:pd.DataFrame, Np:int=1000, Nt:int=60, T:int=60,
+        color_dict:Union[dict, None]=None, ref_date:str='2011-01-01', 
+        lags:Union[tuple, list]=((1,1),(2,2))):
+        """
+        Inputs:
+        -------
+        df: pandas Data Frame
+            Data frame with the historical behavior of the interest variables.
+            It is expected that the index is a datetime index. It is supposed
+            that the TIBR rate is the first column.
+        Np: integer
+            Number of paths simulated
+
+        Nt: numerical value
+            Number of time steps taken along the simulation
+
+        T: numerical value
+            Time horizon over which the simulation will occur
+
+        color_dict: dicitonary
+            Dictionary that map the colors to the ploted lines in the
+            visualization methods. It should contain the following keys:
+
+            - hist: historical data line
+            - mean: mean of the simulated paths
+            - min: minimum value of each simulated step
+            - max: maximum value of each simulated step
+            - perc_95: 95th percentile of each simulated step
+            - perc_5: 5th percentile of each simulated step
+            - hist_min: minimum historical value
+            - hist_max: maximum historical value
+        
+        u_bound: numerical value
+            Upper bound of the simulated paths
+        
+        l_bound: numerical value 
+            Lower bound of the simulated paths
+        
+        ref_date: str (expected format '%Y-%m-%d')
+            String with the initial date of analysis to compute the 
+            parameters of the model.
+        
+        lags: List/tuple
+            Contains the lags used for each variable in the VAR model.
+        """
+        self.lags = lags
+        self.df = df
+        self.Np = Np
+        self.Nt = Nt
+        self.T = T
+        if isinstance(color_dict, type(None)):
+            color_dict = {
+                'hist': '#c00000',
+                'mean': '#c00000',
+                'min': '#70ad47',
+                'max': '#70ad47',
+                'perc_95': '#5e7493',
+                'perc_5': '#5e7493',
+                'hist_min': '#007179',
+                'hist_max': '#007179'
+            }
+        self.COLORS = color_dict
+    
+    def __str__(self):
+        return f'VAR Moder ({self.df.columns[0], '
 
 
 
