@@ -17,45 +17,43 @@ from statsmodels.tsa.arima.model import ARIMA
 import scipy.stats as stats
 from dateutil.relativedelta import relativedelta
 from typing import Union
+from .utils import *
 
 #-------------------------2. Classes------------------------------------
 class GBM(object):
-    '''This objects simulates a stochastic process as a Geometric 
-    Brownian Motion.
-    '''
-    def __init__(self, s, mu, sigma, Np=1000, T=5, Nt=60,u_bound=None,
-                 l_bound=None):
-        """
-        Inputs:
-        -------
-        s: numerical value
-            Initial value of the Geometric Brownian Motions, from which
-            the rest of the process will be simulated. It is usually the
-            last observed value.
-        mu: numerical value
-            Mean or shift of the GBM stochastic process.
-        sigma: numerical value
-            Standard deviation or volatility of the stochastic process.
-        Np: int
-            Number of paths that will be simulated.
-        T: numerical value 
-            Number of periods (based on the time unit selected) that 
-            will be simulated.
-        Nt: integer
-            Number of steps taken during T.
-        u_bound: numerical value
-            Upper bound to the simulated paths. If a value in the 
-            simulated paths take a value greater, it will be truncated
-            to this value.
-        l_bound: numerical value
-            Lower bound to the simulated paths. If a value in the 
-            simulated paths take a value lower, it will be truncated to
-            this value.
 
-        Outputs:
-        --------
-        None 
+    def __init__(
+            self, s: float, mu:float, sigma:float, Np:int=1000, 
+            T:int=5, Nt:int=60,u_bound:float=None,l_bound:float=None):
+        """This objects simulates a stochastic process as a Geometric 
+    Brownian Motion
+
+        Args:
+            s (float): initial value of the Geometric Brownian Motion,
+            from which the rest of the process will be simulated. It
+            is usually the last observed value.
+
+            mu (float): mean or shift of the GBM.
+
+            sigma (float): stadard devation or volatility of the GBM.
+
+            Np (int, optional): number of paths that will be simulated. 
+            Defaults to 1000.
+
+            T (int, optional): number of periods (based on the time unit
+            selected) that will be simulated. Defaults to 5.
+
+            Nt (int, optional): number of steps taken during T. Defaults
+            to 60.
+
+            u_bound (float, optional): upper bound to the simulated paths.
+            If the value in the simulated paths take a greater value, it
+            will be truncated to this value. Defaults to None.
+            l_bound (float, optional): lower bound to the simulated paths.
+            If the value in the simulated paths take a lower value, it
+            will be truncated to this value. Defaults to None.
         """
+
         self.s = s
         self.mu = mu
         self.sigma = sigma
@@ -987,9 +985,14 @@ class VARModelSeries(GBMRateSeries):
     """This model contains bi-varible VAR model methods and attributes
     for the forecasting of the two variables.
     """
-    def __init__(self, df:pd.DataFrame, Np:int=1000, Nt:int=60, T:int=60,
-        color_dict:Union[dict, None]=None, ref_date:str='2011-01-01', 
-        lags:Union[tuple, list]=((1,1),(2,2))):
+    def __init__(self, df:pd.DataFrame, 
+        Np: int = 1000,
+        Nt: int = 60, 
+        T: int = 60,
+        color_dict: Union[dict, None] = None,
+        ref_date: str = '2011-01-01', 
+        lags: Union[tuple, list] = ((1,1),(2,2)), 
+        trans_par: Union[list, tuple, None] = (1, 0.15)):
         """
         Inputs:
         -------
@@ -1031,6 +1034,8 @@ class VARModelSeries(GBMRateSeries):
         
         lags: List/tuple
             Contains the lags used for each variable in the VAR model.
+        
+        trans_par: 
         """
         self.lags = lags
         self.df = df
@@ -1049,36 +1054,16 @@ class VARModelSeries(GBMRateSeries):
                 'hist_max': '#007179'
             }
         self.COLORS = color_dict
+        self.trans_par = trans_par
     
     def __str__(self):
-        return f'VAR Moder ({self.df.columns[0], '
+        return f'VAR Moder ({list(self.df.columns)})'
 
+    @property
+    def simulated_df(self):
+        assert len(self.df.columns)==2, 'You passed more than 2 series to the model'
+        assert any(['TIBR'==i for i in self.df.columns]), 'The DataFrame does not contain TIBR series'
 
-
-#-----------------------3. Auxiliary Functions -------------------------
-def quant_5(x):
-    '''Returns the 5th percentile.
-    Inputs:
-    -------
-    x: array-like
-    '''
-    return x.quantile(0.05)
-
-def quant_95(x):
-    '''Returns the 95th percentile.
-    Inputs:
-    -------
-    x: array-like
-    '''
-    return x.quantile(0.95)
-def prop_label(x):
-    '''Returns a proportion of value x. It is used to possition labels
-    in plots.
-    '''
-    if x<0: return 1.3*x
-    else: return 1.05*x
-def jump_class(x):
-    if x >= 5: return 5
-    elif x == 0: return 1
-    else: return x
-
+        # Make the Sigmoid transformation:
+        if self.trans_par:
+            pass 
