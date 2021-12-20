@@ -1,1 +1,1 @@
-from .stochastic_modeling.py import *
+from .stochastic_modeling import *

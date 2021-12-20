@@ -8,50 +8,49 @@ the Geometric Brownian Motion Monte Carlo simulation.
 # ------------------------1. Libraries----------------------------------
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib as mlp
+from matplotlib import pyplot as plt
 import seaborn as sns
+import matplotlib as mlp
 import matplotlib.dates as mdates
 from matplotlib.dates import DateFormatter
 from statsmodels.tsa.arima.model import ARIMA
 import scipy.stats as stats
 from dateutil.relativedelta import relativedelta
+import datetime
 from typing import Union
 from .utils import *
 
 #-------------------------2. Classes------------------------------------
 class GBM(object):
+    """This objects simulates a stochastic process as a Geometric 
+    Brownian Motion
+    """
 
     def __init__(
             self, s: float, mu:float, sigma:float, Np:int=1000, 
-            T:int=5, Nt:int=60,u_bound:float=None,l_bound:float=None):
-        """This objects simulates a stochastic process as a Geometric 
-    Brownian Motion
-
+            T:int=5, Nt:int=60,u_bound:float=None,l_bound:float=None
+            ):
+        """
         Args:
             s (float): initial value of the Geometric Brownian Motion,
-            from which the rest of the process will be simulated. It
-            is usually the last observed value.
-
+                from which the rest of the process will be simulated. It
+                is usually the last observed value.
             mu (float): mean or shift of the GBM.
-
             sigma (float): stadard devation or volatility of the GBM.
-
             Np (int, optional): number of paths that will be simulated. 
-            Defaults to 1000.
-
+                Defaults to 1000.
             T (int, optional): number of periods (based on the time unit
-            selected) that will be simulated. Defaults to 5.
-
+                selected) that will be simulated. Defaults to 5.
             Nt (int, optional): number of steps taken during T. Defaults
-            to 60.
-
-            u_bound (float, optional): upper bound to the simulated paths.
-            If the value in the simulated paths take a greater value, it
-            will be truncated to this value. Defaults to None.
-            l_bound (float, optional): lower bound to the simulated paths.
-            If the value in the simulated paths take a lower value, it
-            will be truncated to this value. Defaults to None.
+                to 60.
+            u_bound (float, optional): upper bound to the simulated 
+                paths. If the value in the simulated paths take a 
+                greater value, it will be truncated to this value. 
+                Defaults to None.
+            l_bound (float, optional): lower bound to the simulated 
+                paths. If the value in the simulated paths take a lower 
+                value, it will be truncated to this value. Defaults to 
+                None.
         """
 
         self.s = s
@@ -83,12 +82,238 @@ class GBM(object):
         elif self.l_bould:
             s_sims = np.where(s_sims<self.l_bould, self.l_bould, s_sims)
         return s_sims
+
+class RateSeriesSimulation(object):
+    """This is a general object used as parent class for the rate 
+    modeling subclasses as GBMRateSeries. It containes methods to model 
+    and plot time series simulations.
+    """
+
+    def __init__(
+        self, series: Union[pd.DataFrame, pd.Series], Np:int=1000, 
+        Nt:int=60, T:int=60, color_dict:dict=None, 
+        upper_space:int=0.1, lower_space:float=0.1
+        ):
+        """
+        Args:
+            series (Union[pd.DataFrame, pd.Series]): contains the data 
+                of the series that will be modeled.
+            Np (int, optional): [description]. Defaults to 1000.
+            Nt (int, optional): [description]. Defaults to 60.
+            T (int, optional): [description]. Defaults to 60.
+            color_dict (dict, optional): [description]. Defaults to 
+                None.
+            upper_space (int, optional): [description]. Defaults to 0.1.
+            lower_space (float, optional): [description]. Defaults to 
+                0.1.
+
+        Returns:
+            RateSeriesSimulation: instance of the RateSeriesSimulation
+                class.
+        """
+        # Define variables:
+        if not color_dict:
+            color_dict = {
+                'hist': '#c00000',
+                'mean': '#c00000',
+                'min': '#70ad47',
+                'max': '#70ad47',
+                'perc_95': '#5e7493',
+                'perc_5': '#5e7493',
+                'hist_min': '#007179',
+                'hist_max': '#007179'
+                }
+
+        # Define attributes:
+        self.series = series
+        self.COLORS = color_dict
+        self.Np= Np
+        self.Nt = Nt
+        self.T = T
+        self.upper_space = upper_space
+        self.lower_space = lower_space
     
+    @property
+    def simulated_df(self)->pd.DataFrame:
+        """"With the attributes and methods of the object, simulates the
+        interest rate.
+
+        Returns:
+            pd.DataFrame: DataFrame with the simulated seires
+        """
+        return pd.DataFrame()
+    
+    def plot_full_series(
+        self, start:Union[str, datetime.datetime], 
+        end:Union[str, datetime.datetime], figsize:tuple=(15,10),
+        time_space:float=2., dec:int=1
+        ):
+        """Plots the historical and forecasted values of the analized 
+        series, with the mean, min, max, 5th and 95th percentiles of the
+        simulated steps.
+
+        Args:
+            start (Union[str, datetime.datetime]): strin with the
+                beginning date of the plot. Expected format: '%Y-%m-%d'.
+            end (Union[str, datetime.datetime]): strin with the 
+                beginning date of the plot. Expected format: '%Y-%m-%d'.
+            figsize (tuple, optional): [description]. Defaults to 
+                (15,10).
+            time_space (float, optional): value of time units along the
+                x-axis the labels will be possitioned. Defaults to 2.
+            dec (int, optional): number of decimals in the labels of the
+                plot. Defaults to 1.
+
+        Returns:
+            tuple: tuple with mlp.figure.Figure, 
+                mlp..axes._subplots.AxesSubplot which contain the plot
+                objects.
+        """
+        forecast = self.sim_df.agg(['min', 'max', 'mean',quant_5,
+                                    quant_95 ], axis=1)
+        forecast['Fecha'] = forecast.index
+        forecast.reset_index(drop=True, inplace=True)
+        series = self.series.to_frame()
+        last_date = series.index.max()
+        last_val = series.loc[last_date].item()
+        series_name = series.columns.item()
+        series['Fecha'] = series.index
+        series.reset_index(drop=True, inplace=True)
+        temp = series.merge(forecast, how='outer', on='Fecha')
+        
+        # Delimit the beginning and end:
+        temp = temp[(temp['Fecha']>=start) & (temp['Fecha']<=end)]
+
+        # Plot the data:
+        fig, ax = plt.subplots(figsize=figsize)
+        ax.plot(temp['Fecha'], temp[series_name], 
+                 color=self.COLORS['hist'])
+        ax.plot(
+            temp['Fecha'], 
+            temp['quant_5'], 
+            color = self.COLORS['perc_5'],
+            linestyle = ':',
+            linewidth = 2,
+            label = 'Perc 5 - Perc 95'
+        )
+        ax.plot(
+            temp['Fecha'], 
+            temp['quant_95'], 
+            color = self.COLORS['perc_95'],
+            linestyle = ':',
+            linewidth = 2
+        )
+        ax.plot(
+            temp['Fecha'], 
+            temp['min'], 
+            color = self.COLORS['min'],
+            linestyle = '--',
+            linewidth = 2,
+            label = 'Min - Max'
+        )
+        ax.plot(
+            temp['Fecha'], 
+            temp['max'], 
+            color = self.COLORS['max'],
+            linestyle = '--',
+            linewidth = 2
+        )
+        ax.plot(
+            temp['Fecha'], 
+            temp['mean'], 
+            color = self.COLORS['mean'],
+            linewidth = 2,
+            label = 'Media'
+        )
+        # Set the axis values:
+        month_fmt = mdates.MonthLocator(interval=3)
+        ax.xaxis.set_major_locator(month_fmt)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b-%y'))
+        plt.xticks(rotation=90, ha='right')
+
+        # Give label of the last observed value:
+        d_adj = month_space+2
+        local_int = temp.loc[
+            (temp['Fecha']>=last_date-relativedelta(months=d_adj)) &
+            (temp['Fecha']<=last_date+relativedelta(months=int(1.5*d_adj))),
+            series_name
+        ]
+        plt.text(
+            x = last_date-relativedelta(months=d_adj),
+            y = local_int.max(),
+            s = round(last_val,dec),
+            color = self.COLORS['hist']
+        )
+
+        dates = temp.loc[temp['Fecha']>last_date, 'Fecha']
+        dist_u = 1.01
+        dist_d = 0.8
+        for date in dates:
+            if date.month%6==0 and (date-last_date).days>90:
+                temp_min = round(temp.loc[temp['Fecha']==date, 'min'].item(),dec)
+                temp_max = round(temp.loc[temp['Fecha']==date, 'max'].item(),dec)
+                temp_mean = round(temp.loc[temp['Fecha']==date, 'mean'].item(),dec)
+                temp_95 = round(temp.loc[temp['Fecha']==date, 'quant_95'].item(),dec)
+                temp_5 = round(temp.loc[temp['Fecha']==date, 'quant_5'].item(),dec)
+                local_int = temp.loc[
+                    (temp['Fecha']>=date-relativedelta(months=month_space)) &
+                    (temp['Fecha']<=date+relativedelta(months=int(1.5*month_space)))
+                ]
+                pos_values = local_int.max()
+                plt.text(
+                    x = date-relativedelta(months=month_space), 
+                    y = pos_values['min']*dist_d,
+                    s = temp_min,
+                    color = self.COLORS['min']
+                )
+                plt.text(
+                    x = date-relativedelta(months=month_space), 
+                    y = pos_values['max']*dist_u,
+                    s = temp_max,
+                    color = self.COLORS['max']
+                )
+                plt.text(
+                    x = date-relativedelta(months=month_space), 
+                    y = pos_values['mean']*dist_u,
+                    s = temp_mean,
+                    color = self.COLORS['mean']
+                )
+                plt.text(
+                    x = date-relativedelta(months=month_space), 
+                    y = pos_values['quant_95']*dist_u,
+                    s = temp_95,
+                    color = self.COLORS['perc_95']
+                )
+                plt.text(
+                    x = date-relativedelta(months=month_space), 
+                    y = pos_values['quant_5']*dist_d*1.1,
+                    s = temp_5,
+                    color = self.COLORS['perc_5']
+                )
+        bottom_val = temp.select_dtypes(include='float64').min().min()
+        top_val = temp.select_dtypes(include='float64').max().max()
+        if bottom_val<0:
+            bottom_val = bottom_val*1.1
+        else:
+            bottom_val = bottom_val*0.8
+        plt.ylim(
+            bottom = bottom_val, 
+            top = top_val*1.1
+        )
+        plt.xlim(
+            left = temp['Fecha'].min(), 
+            right = temp['Fecha'].max()+relativedelta(months=month_space)
+        )
+        plt.legend()
+        return fig, ax
+
+
 class GBMRateSeries(object):
     """This object stores a rate series, its statistical information
     and with it generates GBM simulations of the rate series. It also 
     has methods to plot historical behaviour plus its variations.
     """
+
     def __init__(self, series, Np=1000, Nt=60, T=60, color_dict=None, 
                  u_bound=None, l_bound=None):
         """
