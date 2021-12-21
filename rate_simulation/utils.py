@@ -6,6 +6,7 @@ the library.
 """
 # ------------------------ Import Libraries -----------------------------------
 import numpy as np
+import pandas as pd
 from typing import Union
 
 #----------------------- Complementary Funcitons ------------------------------
@@ -58,3 +59,13 @@ def jump_class(x: Union[float, int])->int:
     if x >= 5: return 5
     elif x == 0: return 1
     else: return x 
+
+def aggregate_random_paths(df: pd.DataFrame)->pd.DataFrame:
+    """[summary]
+
+    Args:
+        df (pd.DataFrame): [description]
+
+    Returns:
+        pd.DataFrame: [description]
+    """
