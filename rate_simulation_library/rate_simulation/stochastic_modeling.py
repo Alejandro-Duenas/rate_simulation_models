@@ -62,8 +62,8 @@ class GBM(object):
         self.T = T
         self.Nt = Nt
         self.dt = T/Nt
-        self.u_bound = upper_bound
-        self.l_bould = lower_bound
+        self.upper_bound = upper_bound
+        self.lower_bound = lower_bound
     
     @property
     def simulated_paths(self):
@@ -86,10 +86,10 @@ class GBM(object):
                 self.upper_bound, 
                 simulated_paths
                 )
-        elif self.lower_bould:
+        elif self.lower_bound:
             simulated_paths = np.where(
-                simulated_paths<self.lower_bould, 
-                self.lower_bould, 
+                simulated_paths<self.lower_bound, 
+                self.lower_bound, 
                 simulated_paths
                 )
 
@@ -106,8 +106,7 @@ class RateSeriesSimulation(object):
 
     def __init__(
         self, series: Union[pd.DataFrame, pd.Series], Np: int=1000, 
-        Nt: int=60, T: int=60, color_dict: dict=None, 
-        upper_space: int=0.1, lower_space: float=0.1,
+        Nt: int=60, T: int=60, color_dict: dict=None,
         upper_bound: float=None, lower_bound: float=None
         ):
         """
@@ -134,10 +133,6 @@ class RateSeriesSimulation(object):
                 - hist_max: maximum historical value
                 
                 Defaults to None.
-            upper_space (int, optional): determines the position of the
-                upper labels. Defaults to 0.1.
-            lower_space (float, optional): determines the position of the
-                lower labels. Defaults to 0.1.
             upper_bound (float, optional): upper bound value for the
                 simulations.
             lower_bound (float, optional): lower bound value for the
@@ -166,13 +161,11 @@ class RateSeriesSimulation(object):
         self.Np= Np
         self.Nt = Nt
         self.T = T
-        self.upper_space = upper_space
-        self.lower_space = lower_space
         self.upper_bound = upper_bound
         self.lower_bound = lower_bound
+        self.simulated_df = self.simulate_df()
     
-    @property
-    def simulated_df(self)->pd.DataFrame:
+    def simulate_df(self)->pd.DataFrame:
         """"With the attributes and methods of the object, simulates the
         interest rate.
 
@@ -215,8 +208,9 @@ class RateSeriesSimulation(object):
         """
         agg_df = df.agg(
             func = ['min', 'max', 'mean', quant_5, quant_95],
-            axis = 1
+            axis = axis
             )
+
         return agg_df
         
         
@@ -250,6 +244,7 @@ class RateSeriesSimulation(object):
         var_forecast = self.full_df-self.full_df.shift(delta_t)
         init_date = self.series.index.max()
         var_forecast = var_forecast.loc[init_date:]
+
         return var_forecast
     
     
@@ -257,7 +252,8 @@ class RateSeriesSimulation(object):
     def plot_full_series(
         self, start: Union[str, datetime.datetime], 
         end: Union[str, datetime.datetime], figsize: tuple=(15,10),
-        time_space: float=2., dec: int=1
+        time_space: float=2., dec: int=1,
+        upper_space: int=0.1, lower_space: float=0.1
         ):
         """Plots the historical and forecasted values of the analized 
         series, with the mean, min, max, 5th and 95th percentiles of the
@@ -281,7 +277,9 @@ class RateSeriesSimulation(object):
                 objects.
         """
 
+        init_date = self.series.index.max()
         forecast = self.aggregate_simulations(self.simulated_df)
+        forecast.loc[init_date, :] = self.series[init_date]
         forecast['Fecha'] = forecast.index
         forecast.reset_index(drop=True, inplace=True)
         series = self.series.to_frame()
@@ -356,8 +354,8 @@ class RateSeriesSimulation(object):
             )
 
         dates = temp.loc[temp['Fecha']>last_date, 'Fecha']
-        dist_u = 1+self.upper_space
-        dist_d = 1-self.lower_space
+        dist_u = 1+upper_space
+        dist_d = 1-lower_space
 
         for date in dates:
             if date.month%6==0 and (date-last_date).days>90:
@@ -439,7 +437,7 @@ class RateSeriesSimulation(object):
     def plot_historic_variation(
         self, start: Union[str, datetime.datetime]='2000-01-01',
         delta_t: int=1, figsize: tuple=(15,10), time_space: int=2,
-        dec: int=2
+        dec: int=2, upper_space: int=0.1, lower_space: float=0.1
         ):
         """Plots the historical variations of the interest series.
 
@@ -454,6 +452,10 @@ class RateSeriesSimulation(object):
                 Defaults to 2.
             dec (int, optional): number of decimals in the labels.
                 Defaults to 2.
+            upper_space (int, optional): determines the position of the
+                upper labels. Defaults to 0.1.
+            lower_space (float, optional): determines the position of the
+                lower labels. Defaults to 0.1.
 
         Returns:
             tuple: tuple with mlp.figure.Figure, 
@@ -472,8 +474,8 @@ class RateSeriesSimulation(object):
         series = series.to_frame()
         series['Fecha'] = series.index
         series.reset_index(drop=True, inplace=True)
-        upper_space = self.upper_space+1
-        lower_space = 1-self.lower_space
+        upper_space = upper_space+1
+        lower_space = 1-lower_space
 
         # Plot variation series with labels:
         fig, ax = plt.subplots(figsize=figsize)
@@ -547,7 +549,8 @@ class RateSeriesSimulation(object):
     def plot_full_variations(
         self, start: Union[str, datetime.datetime],
         end: Union[str, datetime.datetime], delta_t: int=1,
-        figsize: tuple=(15,10), time_space: int=2, dec: int=2
+        figsize: tuple=(15,10), time_space: int=2, dec: int=2,
+        upper_space: int=0.1, lower_space: float=0.1
         )->tuple:
         """Plots both the historical variations and the forecasted
         variations of the series, with its, mean,  cone of confidence 
@@ -566,6 +569,10 @@ class RateSeriesSimulation(object):
                 Defaults to 2.
             dec (int, optional): number of decimals in the labels. 
                 Defaults to 2.
+            upper_space (int, optional): determines the position of the
+                upper labels. Defaults to 0.1.
+            lower_space (float, optional): determines the position of 
+                the lower labels. Defaults to 0.1.
 
         Returns:
             tuple: tuple with mlp.figure.Figure, 
@@ -587,8 +594,8 @@ class RateSeriesSimulation(object):
         last_date = var_series.index[-1]
         start_date = var_series.index[0]
         last_obs_val = var_series.last('1D').item()
-        dist_u = 1+self.upper_space
-        dist_d = 1-self.lower_space
+        dist_u = 1+upper_space
+        dist_d = 1-lower_space
 
         # Give the correct format and join the full information of variations:
         var_series = var_series.to_frame()
@@ -770,7 +777,6 @@ class GBMRateSeries(RateSeriesSimulation):
     def __init__(
         self, series: Union[pd.DataFrame, pd.Series], Np: int=1000, 
         Nt: int=60, T: int=60, color_dict: dict=None, 
-        upper_space: int=0.1, lower_space: float=0.1,
         upper_bound: float=None, lower_bound: float=None
         ):
         """
@@ -797,10 +803,6 @@ class GBMRateSeries(RateSeriesSimulation):
                 - hist_max: maximum historical value
                                                                                                 
                 Defaults to None.
-            upper_space (int, optional): determines the position of the
-                upper labels. Defaults to 0.1.
-            lower_space (float, optional): determines the position of 
-                the lower labels. Defaults to 0.1.
             upper_bound (float, optional): upper bound value for the
                 simulations.
             lower_bound (float, optional): lower bound value for the
@@ -810,22 +812,29 @@ class GBMRateSeries(RateSeriesSimulation):
             RateSeriesSimulation: instance of the RateSeriesSimulation
                 class.
         """
-        RateSeriesSimulation.__init__(series, Np, Nt, T, color_dict, 
-                                      upper_space, lower_space, upper_bound,
-                                      lower_bound)
-
         # Log-monthly changes:
-        log_changes = np.log(self.series/self.series.shift(1)).dropna()
+        log_changes = np.log(series/series.shift(1)).dropna()
         self.mu = log_changes.mean()
         self.sigma = log_changes.std()
         self.last = series.last('1D').item()
 
+        RateSeriesSimulation.__init__(
+            self,
+            series = series,
+            Np = Np,
+            Nt = Nt,
+            T = T, 
+            color_dict = color_dict, 
+            upper_bound = upper_bound,
+            lower_bound = lower_bound
+            )
+
+        
 
     def __str__(self):
         return f'GBM {self.series.name}| Np = {self.Np}| Nt = {self.Nt}'
 
-    @property
-    def simulated_df(self) -> pd.DataFrame:
+    def simulate_df(self) -> pd.DataFrame:
         """Simulates the interest rate of interest following a 
         Geometric Brownian Motion process.
 
@@ -857,73 +866,69 @@ class GBMRateSeries(RateSeriesSimulation):
 
         return simulated_df
 
-class PoissonRateSeries(GBMRateSeries):
-    def __init__(self, series, Np=1000, Nt=60, T=60, color_dict=None, 
-        u_bound=None, l_bound=None, ref_date='2011-01-01',p=4, q=4, i=0):
+class PoissonRateSeries(RateSeriesSimulation):
+    """This object stores a rate series (expected as the policy rate of
+    a central bank), its statitical information, and with it, generates
+    a simulation of the rate with a combinaiton of an ARIMA and a 
+    Poisson process jump model, to simulate the process by which the
+    rate jumps.
+    """
+    def __init__(
+        self, series: pd.Series, Np: int=1000, Nt: int=60, T: int=60, 
+        color_dict: dict=None, 
+        ref_date: Union[str, datetime.datetime]='2011-01-01',
+        p: int=4, q: int=4, i: int=0):
         """
-        Inputs:
-        -------
-        series: pandas Series
-            Series with the historical values of the variable of 
-            interest. It is expected that the index of the series is a 
-            date index
+        Args:
+            series (pd.Series): contains the data of the series that
+                will be modeled.
+            Np (int, optional): number of paths simlated. Defaults to 
+                1000.
+            Nt (int, optional): number of time steps simulated. Defaults
+                to 60.
+            T (int, optional): time horizon over which the simulation is
+                done. Defaults to 60.
+            color_dict (dict, optional): dictionary that maps the colors
+                to the plotted lines in the visualization methods. It 
+                should contain the following keys:
 
-        Np: integer
-            Number of paths simulated
-
-        Nt: numerical value
-            Number of time steps taken along the simulation
-
-        T: numerical value
-            Time horizon over which the simulation will occur
-
-        color_dict: dicitonary
-            Dictionary that map the colors to the ploted lines in the
-            visualization methods. It should contain the following keys:
-
-            - hist: historical data line
-            - mean: mean of the simulated paths
-            - min: minimum value of each simulated step
-            - max: maximum value of each simulated step
-            - perc_95: 95th percentile of each simulated step
-            - perc_5: 5th percentile of each simulated step
-            - hist_min: minimum historical value
-            - hist_max: maximum historical value
-        
-        u_bound: numerical value
-            Upper bound of the simulated paths
-        
-        l_bound: numerical value 
-            Lower bound of the simulated paths
-        
-        ref_date: str (expected format '%Y-%m-%d')
-            String with the initial date of analysis to compute the 
-            parameters of the model.
-        
-        p: int
-            Number of AR lags for the ARMA model.
-        
-        q: int
-            Number of MA lags for the ARIMA model.
-        
-        i: int
-            Number of I differentiations for the ARIMA model
+                - hist: historical data line
+                - mean: mean of the simulated paths
+                - min: minimum value of each simulated step
+                - max: maximum value of each simulated step
+                - perc_95: 95th percentile of each simulated step
+                - perc_5: 5th percentile of each simulated step
+                - hist_min: minimum historical value
+                - hist_max: maximum historical value
+                                                                                                
+                Defaults to None.
+            ref_date (Union[str, datetime.datetime], optional): initial
+                date of analysis to compute the parameter of the model.
+                Defaults to '2011-01-01'.
+            p (int, optional): number of AR lags for the ARIMA model.
+                Defaults to 4.
+            q (int, optional): number of MA lags for ARIMA model. 
+                Defaults to 4.
+            i (int, optional): order of integration in the series for
+                the ARIMA model. Defaults to 0.
         """
+        
         self.p = p
         self.q = q
         self.i = i
         self.jump_series = series.loc[series/series.shift(1)!=1]
-        self.lmbda = self.compute_lambda()
         self.jump_series = self.jump_series[ref_date:]
-        super().__init__(series, Np, Nt, T, color_dict, u_bound,
-            l_bound)
-        self.series = series
+        RateSeriesSimulation.__init__(self, series, Np, Nt, T, color_dict)
+        self.series = self.series*100
         
     def __str__(self):
-        return f"ARIMA(p: {self.p}, i: {self.i}, q: {self.q}); "+\
+        return f"ARIMA(p: {self.p}, i: {self.i}, q: {self.q}); \n"+\
             f"Poisson dist (lambda: {self.lmbda:4.2f.}"
 
-    def compute_lambda(self):
+    @property
+    def lmbda(self):
+        """Computes the lambda value for the Poisson process.
+        """
         temp_series = self.jump_series.copy().to_frame()
         temp_series['Fecha'] = temp_series.index
         temp_series.reset_index(drop=True, inplace=True)
@@ -934,18 +939,47 @@ class PoissonRateSeries(GBMRateSeries):
         temp_series = temp_series.loc[temp_series['Fecha']>='2011-01-01']
         
         temp_series['class'] = np.vectorize(jump_class)(
-            temp_series['delta_t'].values)
+            temp_series['delta_t'].values
+            )
         lmbda = temp_series['class'].mean()
-        print(f"Lambda value = {lmbda:4.2f}")
-        return lmbda
 
-    def simulate_rate(self):
+        return lmbda
+    
+    def aggregate_simulations(self, df: pd.DataFrame, 
+                              axis: int = 1) -> pd.DataFrame:
+        """Aggregates into minimum, maximum, mean, 5th and 95th 
+        percentiles, from axis. It also approximates to the .25 closer
+        value. 
+
+        Args:
+            df (pd.DataFrame): contains the simulation data that will be
+                aggregated.
+            axis (int): axis in which the aggregation is done.
+
+        Returns:
+            pd.DataFrame: 5 column/row pd.DataFrame with the aggregated 
+                data.
+        """
+        agg_df = RateSeriesSimulation.aggregate_simulations(df, axis=axis)
+        agg_df = np.round(agg_df*4, 0)/4
+        return agg_df
+
+    def simulate_df(self)->pd.DataFrame:
+        """With the historic behavior of the interest rate, and the
+        computed lambda value that characterizes a Poisson process, it 
+        simulates the rate with a combination of an ARIMA model and a
+        Poisson process.
+
+        Returns:
+            pd.DataFrame: (Nt, Np) sized DataFrame with the Np simulated
+                paths.
+        """
         # Generate the date index of the simulation:
         sim_date_index = pd.date_range(
             start = self.series.index[-1]+relativedelta(months=1),
             end = self.series.index[-1]+relativedelta(months=self.Nt),
             freq = 'M'
-        )
+            )
         # Generate an inverse sigmoid transformation of the data:
         trans_series = -np.log(0.15/self.jump_series-1).values
 
@@ -955,10 +989,14 @@ class PoissonRateSeries(GBMRateSeries):
         self.arima_summary = fitted.summary()
         res_std = fitted.resid.std()
         trans_forecast = fitted.forecast(60).reshape(60,1)
+
+        # Generate different paths from the ARIMA model:
         mc_trans_forecast = trans_forecast+np.random.normal(
             scale = res_std*np.sqrt(1),
             size = (60,1000)
-        )
+            )
+
+        # Bring back to % units the forecast:
         mc_forecast = 0.15/(1+np.exp(-mc_trans_forecast))
 
         # Determine the jumps in time according to Poisson distribution:
@@ -968,183 +1006,17 @@ class PoissonRateSeries(GBMRateSeries):
         row_index = pd.DataFrame(row_index).fillna(method='ffill').values.\
             astype(int)
         mc_final = np.zeros((60,1000))
+        
         for i in range(1000):
             mc_final[:,i] = mc_forecast[row_index[:,i],i]
         
-        sim_df = pd.DataFrame(data=mc_final, index=sim_date_index)
+        simulated_df = pd.DataFrame(data=mc_final, index=sim_date_index)
 
         # Round to closer 0.25 multiple, with two decimals:
-        sim_df = np.round(sim_df*400, 0)/400
-        return sim_df
+        simulated_df = np.round(simulated_df*40000, 0)/400
+
+        return simulated_df
     
-    def plot_full_series(self, start, end, figsize=(15,10), month_space=2,
-                         dec=1):
-        """Plots the historical and forecasted values of the analized 
-        series, with the mean, min, max, 5th and 95th percentiles of the
-        simulated steps.
-        
-        Inputs:
-        -------
-        start: string (expected format: '%Y-%m-%d')
-            String with the begining date of the plot.
-        end: string (expected format: '%Y-%m-%d')
-            String with the end date of the plot.
-        figsize: tuple
-            Tuple that determines the size of the figure generated by
-            this method.
-        month_space: int 
-            determines how many time units along the x-axis the labels
-            will be possitioned.
-        dec: int
-            Number of decimals showed in the graph. 
-        
-        Outputs:
-        --------
-        fig: matplotlib Figure
-            Figure that contains the plot
-        ax: matplotlib Axe
-            Axe in which the plot was plotted
-        """
-
-        # Prepare data to be plotted:
-        forecast = self.sim_df.agg(['min','max','mean', quant_5,
-                                    quant_95], axis=1)
-        forecast = np.round(forecast*400, 0)/400
-        forecast['Fecha'] = forecast.index
-        forecast.reset_index(drop=True, inplace=True)
-        series = self.series.to_frame()
-        last_date = series.index.max()
-        last_val = series.loc[last_date].item()
-        series_name = series.columns.item()
-        series['Fecha'] = series.index
-        series.reset_index(drop=True, inplace=True)
-        temp = series.merge(forecast, how='outer', on='Fecha')
-        
-        # Delimit the beginning and end:
-        temp = temp[(temp['Fecha']>=start) & (temp['Fecha']<=end)]
-
-        # Plot the data:
-        fig, ax = plt.subplots(figsize=figsize)
-        ax.plot(temp['Fecha'], temp[series_name], 
-                 color=self.COLORS['hist'])
-        ax.plot(
-            temp['Fecha'], 
-            temp['quant_5'], 
-            color = self.COLORS['perc_5'],
-            linestyle = ':',
-            linewidth = 2,
-            label = 'Perc 5 - Perc 95'
-        )
-        ax.plot(
-            temp['Fecha'], 
-            temp['quant_95'], 
-            color = self.COLORS['perc_95'],
-            linestyle = ':',
-            linewidth = 2
-        )
-        ax.plot(
-            temp['Fecha'], 
-            temp['min'], 
-            color = self.COLORS['min'],
-            linestyle = '--',
-            linewidth = 2,
-            label = 'Min - Max'
-        )
-        ax.plot(
-            temp['Fecha'], 
-            temp['max'], 
-            color = self.COLORS['max'],
-            linestyle = '--',
-            linewidth = 2
-        )
-        ax.plot(
-            temp['Fecha'], 
-            temp['mean'], 
-            color = self.COLORS['mean'],
-            linewidth = 2,
-            label = 'Media'
-        )
-        # Set the axis values:
-        month_fmt = mdates.MonthLocator(interval=3)
-        ax.xaxis.set_major_locator(month_fmt)
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b-%y'))
-        plt.xticks(rotation=90, ha='right')
-
-        # Give label of the last observed value:
-        d_adj = month_space+2
-        local_int = temp.loc[
-            (temp['Fecha']>=last_date-relativedelta(months=d_adj)) &
-            (temp['Fecha']<=last_date+relativedelta(months=int(1.5*d_adj))),
-            series_name
-        ]
-        plt.text(
-            x = last_date-relativedelta(months=d_adj),
-            y = local_int.max(),
-            s = round(last_val,dec),
-            color = self.COLORS['hist']
-        )
-
-        dates = temp.loc[temp['Fecha']>last_date, 'Fecha']
-        dist_u = 1.01
-        dist_d = 0.8
-        for date in dates:
-            if date.month%6==0 and (date-last_date).days>90:
-                temp_min = round(temp.loc[temp['Fecha']==date, 'min'].item(),dec)
-                temp_max = round(temp.loc[temp['Fecha']==date, 'max'].item(),dec)
-                temp_mean = round(temp.loc[temp['Fecha']==date, 'mean'].item(),dec)
-                temp_95 = round(temp.loc[temp['Fecha']==date, 'quant_95'].item(),dec)
-                temp_5 = round(temp.loc[temp['Fecha']==date, 'quant_5'].item(),dec)
-                local_int = temp.loc[
-                    (temp['Fecha']>=date-relativedelta(months=month_space)) &
-                    (temp['Fecha']<=date+relativedelta(months=int(1.5*month_space)))
-                ]
-                pos_values = local_int.max()
-                plt.text(
-                    x = date-relativedelta(months=month_space), 
-                    y = pos_values['min']*dist_d,
-                    s = temp_min,
-                    color = self.COLORS['min']
-                )
-                plt.text(
-                    x = date-relativedelta(months=month_space), 
-                    y = pos_values['max']*dist_u,
-                    s = temp_max,
-                    color = self.COLORS['max']
-                )
-                plt.text(
-                    x = date-relativedelta(months=month_space), 
-                    y = pos_values['mean']*dist_u,
-                    s = temp_mean,
-                    color = self.COLORS['mean']
-                )
-                plt.text(
-                    x = date-relativedelta(months=month_space), 
-                    y = pos_values['quant_95']*dist_u,
-                    s = temp_95,
-                    color = self.COLORS['perc_95']
-                )
-                plt.text(
-                    x = date-relativedelta(months=month_space), 
-                    y = pos_values['quant_5']*dist_d*1.1,
-                    s = temp_5,
-                    color = self.COLORS['perc_5']
-                )
-        bottom_val = temp.select_dtypes(include='float64').min().min()
-        top_val = temp.select_dtypes(include='float64').max().max()
-        if bottom_val<0:
-            bottom_val = bottom_val*1.1
-        else:
-            bottom_val = bottom_val*0.8
-        plt.ylim(
-            bottom = bottom_val, 
-            top = top_val*1.1
-        )
-        plt.xlim(
-            left = temp['Fecha'].min(), 
-            right = temp['Fecha'].max()+relativedelta(months=month_space)
-        )
-        plt.legend()
-        return fig, ax
         
 class VARModelSeries(GBMRateSeries):
     """This model contains bi-varible VAR model methods and attributes
