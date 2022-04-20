@@ -1,4 +1,5 @@
-historico_tasas_python.csv
-eviews_tibr_forecast.xlsx
+*.csv
+*.xlsx
 __pycache__
 .ipynb_checkpoints
+*.html

@@ -7,12 +7,14 @@ the Geometric Brownian Motion Monte Carlo simulation.
 
 # ------------------------1. Libraries----------------------------------
 import numpy as np
+from numpy.random.mtrand import pareto
 import pandas as pd
 from matplotlib import pyplot as plt
 from scipy.stats.morestats import Mean
 import matplotlib.dates as mdates
 from matplotlib.dates import DateFormatter
 from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.api import VAR
 from dateutil.relativedelta import relativedelta
 import datetime
 from typing import Union
@@ -64,7 +66,7 @@ class GBM(object):
         self.dt = T/Nt
         self.upper_bound = upper_bound
         self.lower_bound = lower_bound
-    
+
     @property
     def simulated_paths(self):
         """Simulated Np paths of a Geometric Brownian Motion stochastic
@@ -75,9 +77,9 @@ class GBM(object):
             scale = self.dt**0.5,
             size = (self.Nt, self.Np)
         )
-        first_term = (self.mu-self.sigma**2/2)*self.dt
+        first_term = (self.mu-(self.sigma**2)/2)*self.dt
         simulated_paths = self.s*np.exp(
-            (first_term+self.sigma*brownian_motion).cumsum(axis=0))
+            (first_term+self.sigma*brownian_motion)).cumprod(axis=0)
         
         # Bound the simulation paths:
         if self.upper_bound:
@@ -105,9 +107,9 @@ class RateSeriesSimulation(object):
     """
 
     def __init__(
-        self, series: Union[pd.DataFrame, pd.Series], Np: int=1000, 
-        Nt: int=60, T: int=60, color_dict: dict=None,
-        upper_bound: float=None, lower_bound: float=None
+            self, series: Union[pd.DataFrame, pd.Series], Np: int=1000, 
+            Nt: int=60, T: int=60, color_dict: dict=None,
+            upper_bound: float=None, lower_bound: float=None
         ):
         """
         Args:
@@ -151,11 +153,12 @@ class RateSeriesSimulation(object):
                 'max': '#70ad47',
                 'perc_95': '#5e7493',
                 'perc_5': '#5e7493',
-                'hist_min': '#007179',
-                'hist_max': '#007179'
+                'hist_min': '#08AAB7',
+                'hist_max': '#08AAB7'
                 }
 
         # Define attributes:
+        self._series_type = 'SeriesRateSimulation'
         self.series = series
         self.COLORS = color_dict
         self.Np= Np
@@ -164,6 +167,13 @@ class RateSeriesSimulation(object):
         self.upper_bound = upper_bound
         self.lower_bound = lower_bound
         self.simulated_df = self.simulate_df()
+    
+    def __str__(self):
+        name = f'{self.series.name}: Np = {self.Np} | Nt = {self.Nt}'
+        return '('+self._series_type+') '+ name
+    
+    def __repr__(self):
+        return self.__str__()
     
     def simulate_df(self)->pd.DataFrame:
         """"With the attributes and methods of the object, simulates the
@@ -188,8 +198,9 @@ class RateSeriesSimulation(object):
         observed_df = pd.DataFrame(
             data = np.tile(self.series, (self.Np, 1)).T,
             index = self.series.index
-            )
-        full_df = pd.concat([observed_df, self.simulated_df])
+        )
+        full_df = pd.concat([observed_df.iloc[:-1, :], self.simulated_df])
+
         return full_df
 
     @staticmethod
@@ -209,7 +220,7 @@ class RateSeriesSimulation(object):
         agg_df = df.agg(
             func = ['min', 'max', 'mean', quant_5, quant_95],
             axis = axis
-            )
+        )
 
         return agg_df
         
@@ -247,529 +258,82 @@ class RateSeriesSimulation(object):
 
         return var_forecast
     
+    def plot_hist_forecast(self, 
+                           **layout_dict) -> plotly.graph_objs.Figure:
+        """Plots the historical behavior of the analized series plus its
+        Monte Carlo simulation forecast.
+
+        Returns:
+            plotly.graph_objs._figure.Figure: figure with the plot
+                information.
+        """
+        mc_agg_df = self.aggregate_simulations(self.simulated_df)
+        fig = plotly_plot(
+            hist_series = self.series,
+            mc_agg_df = mc_agg_df,
+            color_dict = self.COLORS,
+            **layout_dict
+        )
+        return fig
     
-
-    def plot_full_series(
-        self, start: Union[str, datetime.datetime], 
-        end: Union[str, datetime.datetime], figsize: tuple=(15,10),
-        time_space: float=2., dec: int=1,
-        upper_space: int=0.1, lower_space: float=0.1
-        ):
-        """Plots the historical and forecasted values of the analized 
-        series, with the mean, min, max, 5th and 95th percentiles of the
-        simulated steps.
+    def plot_variations(self, delta_t: int =1,
+                        **layout_dict) -> plotly.graph_objs.Figure:
+        """Plots the historical behavior of the analized series variations plus
+        its Monte Carlo simulation forecast variations.
 
         Args:
-            start (Union[str, datetime.datetime]): strin with the
-                beginning date of the plot. Expected format: '%Y-%m-%d'.
-            end (Union[str, datetime.datetime]): strin with the 
-                beginning date of the plot. Expected format: '%Y-%m-%d'.
-            figsize (tuple, optional): [description]. Defaults to 
-                (15,10).
-            time_space (float, optional): value of time units along the
-                x-axis the labels will be possitioned. Defaults to 2.
-            dec (int, optional): number of decimals in the labels of the
-                plot. Defaults to 1.
+            delta_t (int, Optional): time delta of the variation. 
+                Defaults to 1.
 
         Returns:
-            tuple: tuple with mlp.figure.Figure, 
-                mlp..axes._subplots.AxesSubplot which contain the plot
-                objects.
+            plotly.graph_objs._figure.Figure: figure with the plot
+                information.
         """
+        var_series = self.variation_series(delta_t=delta_t)
+        var_mc = self.variation_forecast_df(delta_t=delta_t)
 
-        init_date = self.series.index.max()
-        forecast = self.aggregate_simulations(self.simulated_df)
-        forecast.loc[init_date, :] = self.series[init_date]
-        forecast['Fecha'] = forecast.index
-        forecast.reset_index(drop=True, inplace=True)
-        series = self.series.to_frame()
-        last_date = series.index.max()
-        last_val = series.loc[last_date].item()
-        series_name = series.columns.item()
-        series['Fecha'] = series.index
-        series.reset_index(drop=True, inplace=True)
-        temp = series.merge(forecast, how='outer', on='Fecha')
-        
-        # Delimit the beginning and end:
-        temp = temp[(temp['Fecha']>=start) & (temp['Fecha']<=end)]
-
-        # Plot the data:
-        fig, ax = plt.subplots(figsize=figsize)
-        ax.plot(temp['Fecha'], temp[series_name], 
-                 color=self.COLORS['hist'])
-        ax.plot(
-            temp['Fecha'], 
-            temp['quant_5'], 
-            color = self.COLORS['perc_5'],
-            linestyle = ':',
-            linewidth = 2,
-            label = 'Perc 5 - Perc 95'
-            )
-        ax.plot(
-            temp['Fecha'], 
-            temp['quant_95'], 
-            color = self.COLORS['perc_95'],
-            linestyle = ':',
-            linewidth = 2
-            )
-        ax.plot(
-            temp['Fecha'], 
-            temp['min'], 
-            color = self.COLORS['min'],
-            linestyle = '--',
-            linewidth = 2,
-            label = 'Min - Max'
-            )
-        ax.plot(
-            temp['Fecha'], 
-            temp['max'], 
-            color = self.COLORS['max'],
-            linestyle = '--',
-            linewidth = 2
-            )
-        ax.plot(
-            temp['Fecha'], 
-            temp['mean'], 
-            color = self.COLORS['mean'],
-            linewidth = 2,
-            label = 'Media'
-            )
-        # Set the axis values:
-        month_fmt = mdates.MonthLocator(interval=3)
-        ax.xaxis.set_major_locator(month_fmt)
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b-%y'))
-        plt.xticks(rotation=90, ha='right')
-
-        # Give label of the last observed value:
-        local_int = temp.loc[
-            (temp['Fecha']>=last_date-relativedelta(months=time_space)) &
-            (temp['Fecha']<=last_date+relativedelta(months=int(time_space))),
-            series_name
-            ]
-        plt.text(
-            x = last_date-relativedelta(months=time_space),
-            y = local_int.max(),
-            s = round(last_val, dec),
-            color = self.COLORS['hist']
-            )
-
-        dates = temp.loc[temp['Fecha']>last_date, 'Fecha']
-        dist_u = 1+upper_space
-        dist_d = 1-lower_space
-
-        for date in dates:
-            if date.month%6==0 and (date-last_date).days>90:
-
-                # Find label's valeus:
-                temp_min = round(temp.loc[temp['Fecha']==date, 'min'].item(),
-                                 dec)
-                temp_max = round(temp.loc[temp['Fecha']==date, 'max'].item(),
-                                 dec)
-                temp_mean = round(temp.loc[temp['Fecha']==date, 'mean'].item(),
-                                  dec)
-                temp_95 = round(
-                    temp.loc[temp['Fecha']==date, 'quant_95'].item(),
-                    dec
-                    )
-                temp_5 = round(temp.loc[temp['Fecha']==date, 'quant_5'].item(),
-                               dec)
-
-                local_int = temp.loc[
-                    (temp['Fecha']>=date-relativedelta(months=time_space)) &
-                    (temp['Fecha']<=date+relativedelta(months=int(time_space)))
-                    ]
-
-                pos_values = local_int.max()
-
-                # Put labels in plot:
-                plt.text(
-                    x = date-relativedelta(months=time_space), 
-                    y = pos_values['min']*dist_d,
-                    s = temp_min,
-                    color = self.COLORS['min']
-                    )
-                plt.text(
-                    x = date-relativedelta(months=time_space), 
-                    y = pos_values['max']*dist_u,
-                    s = temp_max,
-                    color = self.COLORS['max']
-                    )
-                plt.text(
-                    x = date-relativedelta(months=time_space), 
-                    y = pos_values['mean']*dist_u,
-                    s = temp_mean,
-                    color = self.COLORS['mean']
-                    )
-                plt.text(
-                    x = date-relativedelta(months=time_space), 
-                    y = pos_values['quant_95']*dist_u,
-                    s = temp_95,
-                    color = self.COLORS['perc_95']
-                    )
-                plt.text(
-                    x = date-relativedelta(months=time_space), 
-                    y = pos_values['quant_5']*dist_d*1.1,
-                    s = temp_5,
-                    color = self.COLORS['perc_5']
-                    )
-
-        bottom_val = temp.select_dtypes(include='float64').min().min()
-        top_val = temp.select_dtypes(include='float64').max().max()
-
-        if bottom_val<0:
-            bottom_val = bottom_val*1.1
-        else:
-            bottom_val = bottom_val*0.9
-
-        plt.ylim(
-            bottom = bottom_val, 
-            top = top_val*1.1
-            )
-        plt.xlim(
-            left = temp['Fecha'].min(), 
-            right = temp['Fecha'].max()+relativedelta(months=time_space)
-            )
-        plt.legend()
-        plt.show()
-
-        return fig, ax
-
-    def plot_historic_variation(
-        self, start: Union[str, datetime.datetime]='2000-01-01',
-        delta_t: int=1, figsize: tuple=(15,10), time_space: int=2,
-        dec: int=2, upper_space: int=0.1, lower_space: float=0.1
-        ):
-        """Plots the historical variations of the interest series.
-
-        Args:
-            start (str, optional): starting date of the plot. Defaults 
-                to '2000-01-01'. Expected format'%Y-%m-%d'
-            delta_t (int, optional): delta of time from which the 
-                variation will be computed. Defaults to 1.
-            figsize (tuple, optional): figure size. Defaults to (15,10).
-            time_space (int, optional): number of time periods along the
-                x-axis from which the labels will be positioned. 
-                Defaults to 2.
-            dec (int, optional): number of decimals in the labels.
-                Defaults to 2.
-            upper_space (int, optional): determines the position of the
-                upper labels. Defaults to 0.1.
-            lower_space (float, optional): determines the position of the
-                lower labels. Defaults to 0.1.
-
-        Returns:
-            tuple: tuple with mlp.figure.Figure, 
-                mlp..axes._subplots.AxesSubplot which contain the plot
-                objects.
-        """
-        # Compute variation series and key values:
-        series = self.variation_series(delta_t=delta_t)[start:]
-        hist_max = series.max()
-        max_date = series.idxmax()
-        hist_min = series.min()
-        min_date = series.idxmin()
-        last_date = series.index.max()
-        start_date = series.index.min()
-        series_name = series.name
-        series = series.to_frame()
-        series['Fecha'] = series.index
-        series.reset_index(drop=True, inplace=True)
-        upper_space = upper_space+1
-        lower_space = 1-lower_space
-
-        # Plot variation series with labels:
-        fig, ax = plt.subplots(figsize=figsize)
-        ax.plot(
-            series['Fecha'], 
-            series[series_name],
-            color = self.COLORS['hist'],
-            label = 'Variación'
-            )
-        ax.axhline(hist_max, color=self.COLORS['hist_max'], 
-                   linestyle=':', linewidth=2, label='Min - Max')
-        ax.axhline(hist_min, color=self.COLORS['hist_min'], 
-                   linestyle=':', linewidth=2)
-        month_fmt = mdates.MonthLocator(interval=12)
-        ax.xaxis.set_major_locator(month_fmt)
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b-%y'))
-        plt.xticks(rotation=90, ha='right')
-        
-        plt.text(
-            x = start_date-relativedelta(months=time_space),
-            y = hist_max*upper_space, 
-            s = f"{max_date.strftime('%b-%y')}: {round(hist_max, dec)}",
-            color = self.COLORS['hist_max']
-            )
-        plt.text(
-            x = start_date-relativedelta(months=time_space),
-            y = hist_min*upper_space, 
-            s = f"{min_date.strftime('%b-%y')}: {round(hist_min, dec)}",
-            color = self.COLORS['hist_min']
-            )
-        for date in series['Fecha']:
-            if date.month==last_date.month:
-                local_int = series.loc[
-                    (series['Fecha']>=date-relativedelta(months=time_space)) &
-                    (series['Fecha']<=date+relativedelta(months=time_space)),
-                    series_name
-                    ]
-                val = series.loc[series['Fecha']==date, series_name].item()
-                if val>0 :
-                    plt.text(
-                        x = date-relativedelta(months=time_space),
-                        y = local_int.max()*upper_space,
-                        s = round(val, dec),
-                        color = self.COLORS['hist']
-                        )
-                else:
-                    plt.text(
-                        x = date-relativedelta(months=time_space),
-                        y = local_int.min()*lower_space,
-                        s = round(val, dec),
-                        color = self.COLORS['hist']
-                        )
-        if hist_min<0:
-            bottom = hist_min*1.2
-        else:
-            bottom = hist_min*0.8
-
-        plt.xlim(
-            left = start_date-relativedelta(months=time_space),
-            right = last_date+relativedelta(months=time_space)
-            )
-        plt.ylim(
-            bottom = bottom,
-            top = hist_max*1.2
-            )
-        plt.legend()
-        plt.show()
-
-        return fig, ax
+        var_mc_agg_df = self.aggregate_simulations(var_mc)
+        fig = plotly_plot(
+            hist_series = var_series,
+            mc_agg_df = var_mc_agg_df,
+            color_dict = self.COLORS,
+            **layout_dict
+        )
+        return fig
     
-    def plot_full_variations(
-        self, start: Union[str, datetime.datetime],
-        end: Union[str, datetime.datetime], delta_t: int=1,
-        figsize: tuple=(15,10), time_space: int=2, dec: int=2,
-        upper_space: int=0.1, lower_space: float=0.1
-        )->tuple:
-        """Plots both the historical variations and the forecasted
-        variations of the series, with its, mean,  cone of confidence 
-        interval and maximum and minimum.
+    def plot_simulations(self, n_sims: int = 8, rows: int = 2, cols: int = 4,
+                         **layout_dict) -> plotly.graph_objs.Figure:
+        """Plots in subplots different simulation paths.
 
         Args:
-            start (Union[str, datetime.datetime]): start date of the
-                plot. Expected format: '%Y-%m-%d'.
-            end (Union[str, datetime.datetime]):  end date of the
-                plot. Expected format: '%Y-%m-%d'.
-            delta_t (int, optional): delta of time from which the
-                variation will be computed. Defaults to 1.
-            figsize (tuple, optional): figure size. Defaults to (15,10).
-            time_space (int, optional): number of time periords along 
-                the x-axis from which the labels will be positioned. 
+            n_sims (int, optional): number of simulations ploted. 
+                Defaults to 8.
+            rows (int, optional): number of rows in the subplot. 
                 Defaults to 2.
-            dec (int, optional): number of decimals in the labels. 
-                Defaults to 2.
-            upper_space (int, optional): determines the position of the
-                upper labels. Defaults to 0.1.
-            lower_space (float, optional): determines the position of 
-                the lower labels. Defaults to 0.1.
+            cols (int, optional): number of columns in the subplot. 
+                Defaults to 4.
 
         Returns:
-            tuple: tuple with mlp.figure.Figure, 
-                mlp..axes._subplots.AxesSubplot which contain the plot
-                objects.
+            plotly.graph_objs._figure.Figure: Plotly figure with the 
+                data of the plot.
         """
-        # Get variations:
-        var_series = self.variation_series()
-        series_name = var_series.name
-        var_forecast = self.variation_forecast_df(delta_t=delta_t)
-        var_forecast =  self.aggregate_simulations(var_forecast)
-
-        # Get important variables
-        var_series = var_series[start:]
-        hist_max = var_series.max()
-        max_date = var_series.idxmax()
-        hist_min = var_series.min()
-        min_date = var_series.idxmin()
-        last_date = var_series.index[-1]
-        start_date = var_series.index[0]
-        last_obs_val = var_series.last('1D').item()
-        dist_u = 1+upper_space
-        dist_d = 1-lower_space
-
-        # Give the correct format and join the full information of variations:
-        var_series = var_series.to_frame()
-        var_series['Fecha'] = var_series.index
-        var_series.reset_index(drop=True, inplace=True)
-        var_forecast['Fecha'] = var_forecast.index
-        var_forecast.reset_index(drop=True, inplace=True)
-        full_var = var_series.merge(var_forecast, how='outer', on='Fecha')
-
-        # Delimit the data's beginning and end:
-        full_var = full_var[
-            (full_var['Fecha']>=start) &
-            (full_var['Fecha']<=end)
-            ]
-
-        # Plot the data:
-        fig, ax = plt.subplots(figsize=figsize)
-        ax.plot(full_var['Fecha'], full_var[series_name],
-                color = self.COLORS['hist'])
-        ax.plot(
-            full_var['Fecha'], 
-            full_var['quant_5'], 
-            color = self.COLORS['perc_5'],
-            linestyle = ':',
-            linewidth = 2,
-            label = 'Perc 5 - Perc 95'
-            )
-        ax.plot(
-            full_var['Fecha'], 
-            full_var['quant_95'], 
-            color = self.COLORS['perc_95'],
-            linestyle = ':',
-            linewidth = 2
-            )
-        ax.plot(
-            full_var['Fecha'], 
-            full_var['min'], 
-            color = self.COLORS['min'],
-            linestyle = '--',
-            linewidth = 2,
-            label = 'Min - Max'
-            )
-        ax.plot(
-            full_var['Fecha'], 
-            full_var['max'], 
-            color = self.COLORS['max'],
-            linestyle = '--',
-            linewidth = 2
-            )
-        ax.plot(
-            full_var['Fecha'], 
-            full_var['mean'], 
-            color = self.COLORS['mean'],
-            linewidth = 2,
-            label = 'Media'
-            )
-        ax.axhline(hist_max, color=self.COLORS['hist_max'], 
-                   linestyle=':', linewidth=2, label='Min - Max')
-        ax.axhline(hist_min, color=self.COLORS['hist_min'], 
-                   linestyle=':', linewidth=2)
-        
-        # Set the axis values:
-        month_fmt = mdates.MonthLocator(interval=3)
-        ax.xaxis.set_major_locator(month_fmt)
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%b-%y'))
-        plt.xticks(rotation=90, ha='right')
-
-        # Give label of the reference values:
-        local_int = full_var.loc[
-            (full_var['Fecha']>=last_date-relativedelta(months=time_space)) &
-            (full_var['Fecha']<=last_date+relativedelta(months=time_space)),
-            series_name
-            ]
-        plt.text(
-            x = last_date-relativedelta(months=time_space),
-            y = dist_u*local_int.max(),
-            s = round(last_obs_val,dec),
-            color = self.COLORS['hist']
-            )
-        plt.text(
-            x = start_date,
-            y = prop_label(hist_max), 
-            s = f"{max_date.strftime('%b-%y')}: {round(hist_max,dec)}",
-            color = self.COLORS['hist_max']
-            )
-        plt.text(
-            x = start_date,
-            y = prop_label(hist_min), 
-            s = f"{min_date.strftime('%b-%y')}: {round(hist_min,dec)}",
-            color = self.COLORS['hist_min']
+        sims = list(np.random.randint(0, 999, size=n_sims))
+        mc_sims = self.simulated_df.iloc[:, sims]
+        fig = plot_simulations(
+            series = self.series, 
+            sim_df = mc_sims,
+            color_dict = self.COLORS,
+            rows = rows,
+            cols = cols,
+            **layout_dict    
         )
-
-        dates = full_var.loc[full_var['Fecha']>last_date, 'Fecha']
-        for date in dates:
-            if date.month%6 == 0 and (date-last_date).days>90:
-                temp_min = round(
-                    full_var.loc[full_var['Fecha']==date, 'min'].item(),
-                    dec
-                )
-                temp_max = round(
-                    full_var.loc[full_var['Fecha']==date, 'max'].item(),
-                    dec
-                )
-                temp_mean = round(
-                    full_var.loc[full_var['Fecha']==date, 'mean'].item(),
-                    dec
-                )
-                temp_95 = round(
-                    full_var.loc[full_var['Fecha']==date, 'quant_95'].item(),
-                    dec
-                )
-                temp_5 = round(
-                    full_var.loc[full_var['Fecha']==date, 'quant_5'].item(),
-                    dec
-                )
-                local_int = full_var.loc[
-                    (full_var['Fecha']>=date-relativedelta(months=time_space)) &
-                    (full_var['Fecha']<=date+relativedelta(months=time_space))
-                ]
-                pos_values = local_int.max()
-                plt.text(
-                    x = date-relativedelta(months=time_space), 
-                    y = pos_values['min']*dist_d,
-                    s = temp_min,
-                    color = self.COLORS['min']
-                )
-                plt.text(
-                    x = date-relativedelta(months=time_space), 
-                    y = pos_values['max']*dist_u,
-                    s = temp_max,
-                    color = self.COLORS['max']
-                )
-                plt.text(
-                    x = date-relativedelta(months=time_space), 
-                    y = pos_values['mean']*dist_u,
-                    s = temp_mean,
-                    color = self.COLORS['mean']
-                )
-                plt.text(
-                    x = date-relativedelta(months=time_space), 
-                    y = pos_values['quant_95']*dist_u,
-                    s = temp_95,
-                    color = self.COLORS['perc_95']
-                )
-                plt.text(
-                    x = date-relativedelta(months=time_space), 
-                    y = pos_values['quant_5']*dist_d,
-                    s = temp_5,
-                    color = self.COLORS['perc_5']
-                )
-        bottom_val = full_var.select_dtypes(include='float64').min().min()
-        top_val = full_var.select_dtypes(include='float64').max().max()
-
-        if bottom_val<0:
-            bottom_val = bottom_val*1.1
-        else:
-            bottom_val = bottom_val*0.9
-
-        plt.ylim(
-            bottom = bottom_val, 
-            top = top_val*1.1
-        )
-        plt.xlim(
-            left = full_var['Fecha'].min(), 
-            right = full_var['Fecha'].max()+relativedelta(months=time_space)
-        )
-        plt.legend()
-        return fig, ax
+        return fig
 
 
 # 3. Child GBMRateSeries class:
 
 class GBMRateSeries(RateSeriesSimulation):
-    """This object stores a rate series, its statistical information
+    """This class stores a rate series, its statistical information
     and with it generates GBM simulations of the rate series. It also 
     has methods to plot historical behaviour plus its variations.
     """
@@ -828,11 +392,14 @@ class GBMRateSeries(RateSeriesSimulation):
             upper_bound = upper_bound,
             lower_bound = lower_bound
             )
+        self._series_type = 'GBM Process'
 
         
 
     def __str__(self):
-        return f'GBM {self.series.name}| Np = {self.Np}| Nt = {self.Nt}'
+        base_info = RateSeriesSimulation.__str__()
+        sts_info = f'mean = {self.mu:.2f}, std = {self.sigma:.2f}'
+        return base_info+'\n'+sts_info
 
     def simulate_df(self) -> pd.DataFrame:
         """Simulates the interest rate of interest following a 
@@ -863,6 +430,8 @@ class GBMRateSeries(RateSeriesSimulation):
         self.dt = rate_gbm.dt
         simulated_paths = rate_gbm.simulated_paths
         simulated_df = pd.DataFrame(data=simulated_paths, index=sim_date_index)
+        simulated_df.loc[self.series.index[-1], :] = self.last
+        simulated_df.sort_index(inplace=True)
 
         return simulated_df
 
@@ -876,13 +445,13 @@ class PoissonRateSeries(RateSeriesSimulation):
     def __init__(
         self, series: pd.Series, Np: int=1000, Nt: int=60, T: int=60, 
         color_dict: dict=None, 
-        ref_date: Union[str, datetime.datetime]='2011-01-01',
+        ref_date: Union[str, datetime.datetime]='2008-01-01',
         p: int=4, q: int=4, i: int=0):
         """
         Args:
             series (pd.Series): contains the data of the series that
                 will be modeled.
-            Np (int, optional): number of paths simlated. Defaults to 
+            Np (int, optional): number of paths {simlated. Defaults to 
                 1000.
             Nt (int, optional): number of time steps simulated. Defaults
                 to 60.
@@ -916,35 +485,73 @@ class PoissonRateSeries(RateSeriesSimulation):
         self.p = p
         self.q = q
         self.i = i
-        self.jump_series = series.loc[series/series.shift(1)!=1]
+        self.ref_date = ref_date
+        self.jump_series = series.loc[series/series.shift(1)-1 != 0]
         self.jump_series = self.jump_series[ref_date:]
-        RateSeriesSimulation.__init__(self, series, Np, Nt, T, color_dict)
-        self.series = self.series*100
-        
-    def __str__(self):
-        return f"ARIMA(p: {self.p}, i: {self.i}, q: {self.q}); \n"+\
-            f"Poisson dist (lambda: {self.lmbda:4.2f.}"
+        self.series = series[ref_date:]
+
+        RateSeriesSimulation.__init__(self, self.series, Np, Nt, T, color_dict)
+
+        self.series = self.series * 100
+        arima_rep = f'ARIMA({self.p}, {self.i}, {self.q})'
+        poisson_rep = f'Poisson(lambda = {self.lmbda})' 
+        self._series_type = arima_rep+' || '+poisson_rep
 
     @property
     def lmbda(self):
         """Computes the lambda value for the Poisson process.
         """
-        temp_series = self.jump_series.copy().to_frame()
+        temp_series = self.jump_series.to_frame()
         temp_series['Fecha'] = temp_series.index
-        temp_series.reset_index(drop=True, inplace=True)
+        temp_series.reset_index(inplace=True, drop=True)
         cur_date = temp_series['Fecha']
         shift_cd = cur_date.shift(1)
-        temp_series['delta_t'] = 12*(cur_date.dt.year-shift_cd.dt.year)+\
-            cur_date.dt.month-shift_cd.dt.month
-        temp_series = temp_series.loc[temp_series['Fecha']>='2011-01-01']
-        
-        temp_series['class'] = np.vectorize(jump_class)(
-            temp_series['delta_t'].values
-            )
-        lmbda = temp_series['class'].mean()
+        temp_series['delta_t'] = (
+            12 * (cur_date.dt.year - shift_cd.dt.year) +
+            cur_date.dt.month - shift_cd.dt.month
+        )
+        lmbda = 1/temp_series['delta_t'].mean()
 
         return lmbda
-    
+
+    def poisson_jumps(self, mc_arima_df: pd.DataFrame) -> pd.DataFrame:
+        """Takes a Monte Carlo matrix simulation from an ARIMA model,
+        and adds Poisson jumps to it, according to the lmbda parameter
+        of the modeled time series.
+
+        Args:
+            mc_arima_df (pd.DataFrame): Monte Carlo simulations of an
+                ARIMA model. 
+
+        Returns:
+            pd.DataFrame: Monte Carlo simulations of an ARIMA model with
+                Poisson jumps.
+        """
+        # Prepare ARIMA results:
+        size = mc_arima_df.shape
+        mc_arima_df = np.concatenate(
+            (np.full((1, self.Np), np.NaN), mc_arima_df)
+        )
+
+        # Poisson jump stochastic process:
+        rnd = np.log(np.random.uniform(size=size))
+        jump_sim = 1 + (-rnd/self.lmbda).round(0).cumsum(axis=0)
+        jump_sim = np.where(jump_sim > 61, np.NaN, jump_sim)
+        jump_sim = pd.DataFrame(data=jump_sim).fillna(method='ffill')
+        #jump_sim = jump_sim.fillna(0)
+        jump_sim = jump_sim.astype(int)
+
+        # Include Poisson jumps into Monte Carlo ARIMA:
+        output = np.zeros(size)
+        for i in range(2, 62):
+            jump_index = (jump_sim.loc[:, :]==i).idxmax().values
+            output[i-2, :] = mc_arima_df[jump_index, np.arange(size[1])]
+        output = pd.DataFrame(data=output).fillna(method='ffill')
+        last_obs = self.series[-1]
+        output = output.fillna(last_obs)
+
+        return output
+
     def aggregate_simulations(self, df: pd.DataFrame, 
                               axis: int = 1) -> pd.DataFrame:
         """Aggregates into minimum, maximum, mean, 5th and 95th 
@@ -974,6 +581,7 @@ class PoissonRateSeries(RateSeriesSimulation):
             pd.DataFrame: (Nt, Np) sized DataFrame with the Np simulated
                 paths.
         """
+        #np.random.seed(1789)#-------------------------------------------------------------
         # Generate the date index of the simulation:
         sim_date_index = pd.date_range(
             start = self.series.index[-1]+relativedelta(months=1),
@@ -981,126 +589,376 @@ class PoissonRateSeries(RateSeriesSimulation):
             freq = 'M'
             )
         # Generate an inverse sigmoid transformation of the data:
-        trans_series = -np.log(0.15/self.jump_series-1).values
+        trans_series = -np.log(0.15/self.jump_series-1)
+        change_std = (trans_series-trans_series.shift(1)).std()
 
         # Generate the ARIMA simulation for the rate:
-        model = ARIMA(trans_series, order=(self.p, self.i, self.q))
+        model = ARIMA(trans_series.values, order=(self.p, self.i, self.q))
         fitted = model.fit()
         self.arima_summary = fitted.summary()
-        res_std = fitted.resid.std()
         trans_forecast = fitted.forecast(60).reshape(60,1)
 
         # Generate different paths from the ARIMA model:
-        mc_trans_forecast = trans_forecast+np.random.normal(
-            scale = res_std*np.sqrt(1),
-            size = (60,1000)
-            )
+        mc_trans_forecast = trans_forecast + np.random.normal(
+            scale = change_std,
+            size = (60, self.Np)
+            ).cumsum(axis=0)
 
         # Bring back to % units the forecast:
         mc_forecast = 0.15/(1+np.exp(-mc_trans_forecast))
-
-        # Determine the jumps in time according to Poisson distribution:
-        jump_sim = (0-np.log(np.random.uniform(size=(60,1000)))/self.lmbda)\
-            .round(0).cumsum(axis=0)
-        row_index = np.where(jump_sim>=60, np.NaN, jump_sim)
-        row_index = pd.DataFrame(row_index).fillna(method='ffill').values.\
-            astype(int)
-        mc_final = np.zeros((60,1000))
         
-        for i in range(1000):
-            mc_final[:,i] = mc_forecast[row_index[:,i],i]
-        
-        simulated_df = pd.DataFrame(data=mc_final, index=sim_date_index)
+        # Include Poisson Jumps:
+        mc_forecast = self.poisson_jumps(mc_forecast)
+        mc_forecast.index = sim_date_index
 
         # Round to closer 0.25 multiple, with two decimals:
-        simulated_df = np.round(simulated_df*40000, 0)/400
-
-        return simulated_df
+        mc_forecast = np.round(mc_forecast*400, 0)/4
+        mc_forecast.loc[self.series.index[-1], :] = self.series[-1]*100
+        mc_forecast.sort_index(inplace=True)
+        
+        return mc_forecast
     
         
 class VARModelSeries(GBMRateSeries):
-    """This model contains bi-varible VAR model methods and attributes
-    for the forecasting of the two variables.
+    """This  object stores a rate series, its complementary predictive
+    series, its statistical information. It also contains methods and
+    attributes that help model is as a bi-varible VAR model.
     """
-    def __init__(self, df:pd.DataFrame, 
+
+    def __init__(
+        self, df: pd.DataFrame,
+        predictive_forecast_df: pd.DataFrame,
+        target_name: str,
+        predictive_name: str = 'TIBR',
         Np: int = 1000,
         Nt: int = 60, 
         T: int = 60,
-        color_dict: Union[dict, None] = None,
-        ref_date: str = '2011-01-01', 
-        lags: Union[tuple, list] = ((1,1),(2,2)), 
-        trans_par: Union[list, tuple, None] = (1, 0.15)):
+        color_dict: dict = None,
+        lags: Union[tuple, list] = (1, 2), 
+        transformation_parameters: Union[list, tuple] = (0.15, 1)
+        ):
         """
-        Inputs:
-        -------
-        df: pandas Data Frame
-            Data frame with the historical behavior of the interest variables.
-            It is expected that the index is a datetime index. It is supposed
-            that the TIBR rate is the first column.
-        Np: integer
-            Number of paths simulated
+        Args:
+            df (pd.DataFrame): contains as columns the historical values
+                of the target series and its complementary preditive
+                series.
+            predictive_forecast_df (pd.DataFrame): contains the
+                forecsted values of the preditive rate series, which is
+                the basis, with the estimated VAR parameters, to
+                forecast 
+            target_name (str): name of the target variable of the VAR 
+                model.
+            predictive_name (str, optional): name of the predictive
+                variable. Defaults to 'TIBR'.
+             Np (int, optional): number of paths simlated. Defaults to 
+                1000.
+            Nt (int, optional): number of time steps simulated. Defaults
+                to 60.
+            T (int, optional): time horizon over which the simulation is
+                done. Defaults to 60.
+            color_dict (dict, optional): dictionary that maps the colors
+                to the plotted lines in the visualization methods. It 
+                should contain the following keys:
 
-        Nt: numerical value
-            Number of time steps taken along the simulation
-
-        T: numerical value
-            Time horizon over which the simulation will occur
-
-        color_dict: dicitonary
-            Dictionary that map the colors to the ploted lines in the
-            visualization methods. It should contain the following keys:
-
-            - hist: historical data line
-            - mean: mean of the simulated paths
-            - min: minimum value of each simulated step
-            - max: maximum value of each simulated step
-            - perc_95: 95th percentile of each simulated step
-            - perc_5: 5th percentile of each simulated step
-            - hist_min: minimum historical value
-            - hist_max: maximum historical value
-        
-        u_bound: numerical value
-            Upper bound of the simulated paths
-        
-        l_bound: numerical value 
-            Lower bound of the simulated paths
-        
-        ref_date: str (expected format '%Y-%m-%d')
-            String with the initial date of analysis to compute the 
-            parameters of the model.
-        
-        lags: List/tuple
-            Contains the lags used for each variable in the VAR model.
-        
-        trans_par: 
+                - hist: historical data line
+                - mean: mean of the simulated paths
+                - min: minimum value of each simulated step
+                - max: maximum value of each simulated step
+                - perc_95: 95th percentile of each simulated step
+                - perc_5: 5th percentile of each simulated step
+                - hist_min: minimum historical value
+                - hist_max: maximum historical value
+                                                                                                
+                Defaults to None.
+            lags (Union[tuple, list], optional): array-like object with
+                the lags of both variables. It is supposed that the
+                first set of lags is for the target variable and the
+                second for the predictive variable. 
+                Defaults to ((1,1),(2,2)).
+            transformation_parameters (Union[list, tuple], optional):
+                values in the nominator of the sigmoid tranformation of 
+                the rates. It is expected to have the parameters of 
+                transformation ordered as (predictive, target). Defaults
+                to (0.15, 1).
         """
+        names = [predictive_name, target_name]
         self.lags = lags
-        self.df = df
-        self.Np = Np
-        self.Nt = Nt
-        self.T = T
-        if isinstance(color_dict, type(None)):
-            color_dict = {
-                'hist': '#c00000',
-                'mean': '#c00000',
-                'min': '#70ad47',
-                'max': '#70ad47',
-                'perc_95': '#5e7493',
-                'perc_5': '#5e7493',
-                'hist_min': '#007179',
-                'hist_max': '#007179'
-            }
-        self.COLORS = color_dict
-        self.trans_par = trans_par
+        df = df.dropna()
+        self.pred_forecast_df = predictive_forecast_df/100
+        self.target_name = target_name
+        self.predictive_name = predictive_name
+        self.trans_parameters = np.array(transformation_parameters)
+        self.lag_names = [f'L{i}.{name}' for i in lags for name in names]
+        RateSeriesSimulation.__init__(
+            self,
+            series = df[names],
+            Np = Np,
+            Nt = Nt,
+            T = T,
+            color_dict = color_dict
+        )
+        self.series = df[target_name] * 100
+        self.pred_series = df[predictive_name] * 100
     
     def __str__(self):
-        return f'VAR Moder ({list(self.df.columns)})'
+        return f'VAR Moder ({list(self.series.columns)})'
 
-    @property
-    def simulated_df(self):
-        assert len(self.df.columns)==2, 'You passed more than 2 series to the model'
-        assert any(['TIBR'==i for i in self.df.columns]), 'The DataFrame does not contain TIBR series'
-
+    def simulate_df(self):
         # Make the Sigmoid transformation:
-        if self.trans_par:
-            pass 
+        transformed_series = -np.log(self.trans_parameters/self.series-1)
+        transformed_series = transformed_series.dropna().loc['2008':]
+        trans_pred_forc_df = -np.log(
+            self.trans_parameters[0]/self.pred_forecast_df-1
+        )
+  
+        # Define and train the model:
+        model = VAR(transformed_series)
+        model_fit = model.fit(maxlags=max(self.lags)) 
+        self.var_summary = model_fit.summary()
+        self.params = model_fit.params[self.target_name]
+        # std_error = model_fit.resid[self.target_name].std()
+
+        # Generate the Monte Carlo simulations:
+        last_date = transformed_series.index[-1]
+        mc_forecast = pd.DataFrame(
+            data = np.tile(transformed_series[self.target_name],(self.Np,1)).T,
+            index = transformed_series.index
+        )
+        
+
+        for _ in range(self.Nt):
+            last_date = last_day_month(last_date + relativedelta(months=1))
+            lag_dates = [
+                last_day_month(last_date - relativedelta(months=lag)) for lag 
+                in self.lags
+            ]
+            mc_forecast.loc[last_date, :] = (
+                self.var_computation(
+                    lag_dates = lag_dates, 
+                    lag_names = self.lag_names,
+                    mc_df = trans_pred_forc_df,
+                    target_df = mc_forecast,
+                    params = self.params
+                ) #+ np.random.normal(scale=std_error, size=(1000,))
+            )
+        mc_forecast = mc_forecast.loc[self.series.index[-1]:, :]
+        mc_forecast = self.trans_parameters[1]/(1+np.exp(-mc_forecast))
+
+        return mc_forecast*100
+    
+    @staticmethod
+    def var_computation(
+            lag_dates: list, lag_names: list, mc_df: pd.DataFrame,
+            target_df: pd.DataFrame, params: pd.Series
+            ) -> float:
+        """This function takes a VAR model parameters, the values of the
+        lag dates, a list of lag names, a Monte Carlo simulation
+        dataframe for the predictive variable, the target variable
+        series to predict the next Monte Carlo values for the target
+        variable.
+
+        Args:
+            lag_dates (list): list of the lag dates from which the
+                VAR equation will be computed.
+            lag_names (list): names of the lags that will be searched in
+                the params series.
+            mc_df (pd.DataFrame): Monte Carlo simulations of the
+                predictive variable.
+            target_df (pd.DataFrame): target variables historical data.
+            params (pd.Series): VAR parameters for the target series.
+
+        Returns:
+            float: output of the VAR equation.
+        """
+        output = params['const']
+        i = 0
+        for date in lag_dates:
+            lag_name = lag_names[i]
+            output += mc_df.loc[date, :].values * params[lag_name]
+            i += 1
+            lag_name = lag_names[i]
+            output += target_df.loc[date, :].values * params[lag_name]
+            i += 1
+        
+        return output
+    
+    def plot_simulations(self, n_sims: int = 8, rows: int = 2, cols: int = 4,
+                         **layout_dict) -> plotly.graph_objs.Figure:
+        """Plots in subplots different simulation paths.
+
+        Args:
+            n_sims (int, optional): number of simulations ploted. 
+                Defaults to 8.
+            rows (int, optional): number of rows in the subplot. 
+                Defaults to 2.
+            cols (int, optional): number of columns in the subplot. 
+                Defaults to 4.
+
+        Returns:
+            plotly.graph_objs._figure.Figure: Plotly figure with the 
+                data of the plot.
+        """
+        last_date = self.series.index[-1]
+        sims = list(np.random.randint(0, 999, size=n_sims))
+        mc_sims = self.simulated_df.iloc[:, sims]
+        pred_mc_sims = (self.pred_forecast_df * 100).iloc[:, sims]
+        pred_mc_sims = pred_mc_sims.loc[last_date:, :]
+
+        fig = plot_simulations_with_pred_var(
+            series = self.series,
+            pred_series = self.pred_series, 
+            sim_df = mc_sims,
+            pred_sim_df = pred_mc_sims,
+            color_dict = self.COLORS,
+            rows = rows,
+            cols = cols,
+            **layout_dict    
+        )
+        return fig
+
+class RandomVariationSeriesSimulation(RateSeriesSimulation):
+    """This class simulates a interest rate series that variates in the
+    same line as a reference rate. It also adds a random variation. The
+    series is modeled by using the variations of the reference rate plus
+    some randomness.
+    """
+
+    def __init__(
+            self, series: Union[pd.DataFrame, pd.Series], 
+            mc_reference_df: pd.DataFrame, 
+            reference_rate_series: pd.Series, Np: int = 1000, Nt: int = 60, 
+            T: int = 60, color_dict: dict = None, upper_bound: float = None, 
+            lower_bound: float = None, variation_type: str = 'sum'
+        ):
+        """
+        Args:
+            series (Union[pd.DataFrame, pd.Series]): contains the data
+                of the series that will be modeled.
+            mc_reference_df (pd.DataFrame): contains the historical data
+                and Monte Carlo simulations of the reference rate. From
+                this data frame the object computes the monthly
+                variations that are applied to the reference rate.
+            Np (int, optional): number of paths simlated. Defaults to 
+                1000.
+            Nt (int, optional): number of time steps simulated. Defaults
+                to 60.
+            T (int, optional): time horizon over which the simulation is
+                done. Defaults to 60.
+            color_dict (dict, optional): dictionary that maps the colors
+                to the plotted lines in the visualization methods. It 
+                should contain the following keys:
+
+                - hist: historical data line
+                - mean: mean of the simulated paths
+                - min: minimum value of each simulated step
+                - max: maximum value of each simulated step
+                - perc_95: 95th percentile of each simulated step
+                - perc_5: 5th percentile of each simulated step
+                - hist_min: minimum historical value
+                - hist_max: maximum historical value
+                                                                                                
+                Defaults to None.
+            upper_bound (float, optional): upper bound value for the
+                simulations.
+            lower_bound (float, optional): lower bound value for the
+                simulations.
+            variation_type (str, 'multiplication', 'sum'): defines how
+                the variations are computed. 
+                
+                - 'multiplication': the porcentual variation is computed
+                  and then is multiplied with the last value of the 
+                  modeled rate.
+
+                - 'sum': the difference is computed and then added to 
+                  the modeled rate.
+
+                Defaults to 'sum'.
+        """
+        variation_type = variation_type.lower()
+        var_types = ('multiplication', 'sum')
+        assert variation_type in var_types, f'Invalid var_type passed. Valid types are {var_types}'
+
+        series = series.dropna()
+        last_date = series.index[0]
+        self.reference_rate_series = reference_rate_series[last_date:] * 100
+        self.mc_reference_df = mc_reference_df/100
+        self.variation_type = variation_type
+
+        super().__init__(
+            series = series,
+            Np = Np,
+            Nt = Nt,
+            T = T,
+            color_dict = color_dict,
+            upper_bound = upper_bound,
+            lower_bound = lower_bound
+        )
+        self.series = self.series*100
+        
+    def simulate_df(self) -> pd.DataFrame:
+        """With the mc_reference_df attribute, computes the 1 period
+        variation and then applies that variation to the modeled rate.
+        How this is done is deternmined by the 'variation_type'
+        attribute.
+
+        Returns:
+            pd.DataFrame: contains the simulated paths of the modeles
+                rate.
+        """
+        last_observed_date = self.series.index[-1]
+        last_target_val = self.series[-1]
+        mc_reference = self.mc_reference_df.loc[last_observed_date:, :]
+
+        if self.variation_type == 'sum':
+            var_df = (mc_reference - mc_reference.shift(1)).dropna()
+            rnd_val = np.random.normal(0, 0.001, size=var_df.shape)
+            simulated_df = (
+                last_target_val + 
+                (var_df + rnd_val).cumsum()
+            )
+        else:
+            var_df = (mc_reference/mc_reference.shift(1)).dropna()
+            rnd_val = np.random.normal(0, 0.001, size=var_df.shape)
+            simulated_df = (
+                last_target_val * 
+                (var_df + rnd_val).cumprod()
+            )
+        
+        simulated_df.loc[last_observed_date, :] = last_target_val
+        simulated_df.sort_index(inplace=True)
+        return simulated_df * 100
+    
+    def plot_simulations(self, n_sims: int = 8, rows: int = 2, cols: int = 4,
+                         **layout_dict) -> plotly.graph_objs.Figure:
+        """Plots in subplots different simulation paths.
+
+        Args:
+            n_sims (int, optional): number of simulations ploted. 
+                Defaults to 8.
+            rows (int, optional): number of rows in the subplot. 
+                Defaults to 2.
+            cols (int, optional): number of columns in the subplot. 
+                Defaults to 4.
+
+        Returns:
+            plotly.graph_objs._figure.Figure: Plotly figure with the 
+                data of the plot.
+        """
+        sims = list(np.random.randint(0, 999, size=n_sims))
+        mc_sims = self.simulated_df.iloc[:, sims]
+        pred_mc_sims = (self.mc_reference_df * 100).iloc[:, sims]
+        fig = plot_simulations_with_pred_var(
+            series = self.series,
+            pred_series = self.reference_rate_series, 
+            sim_df = mc_sims,
+            pred_sim_df = pred_mc_sims,
+            color_dict = self.COLORS,
+            rows = rows,
+            cols = cols,
+            **layout_dict    
+        )
+        return fig
+    
+
+
+
