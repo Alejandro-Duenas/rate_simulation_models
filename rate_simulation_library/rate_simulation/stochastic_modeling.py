@@ -6,6 +6,7 @@ the Geometric Brownian Motion Monte Carlo simulation.
 '''
 
 # ------------------------1. Libraries----------------------------------
+from calendar import month
 import numpy as np
 from numpy.random.mtrand import pareto
 import pandas as pd
@@ -237,7 +238,7 @@ class RateSeriesSimulation(object):
             Union[pd.DataFrame, pd.Series]: pandas object with the 
                 series of variations
         """
-        variation_series = (self.series-self.series.shift(delta_t)).dropna()
+        variation_series = self.series.diff(periods=delta_t)
         return variation_series
     
     def variation_forecast_df(self, delta_t: int=1)->pd.DataFrame:
@@ -959,6 +960,158 @@ class RandomVariationSeriesSimulation(RateSeriesSimulation):
         )
         return fig
     
+
+class UVRStochasticModel(RateSeriesSimulation):
+    """This class models the stochastic behavior of the UVR based on the
+    monthly change of the inflation index.
+    """
+    
+    def __init__(
+            self, uvr_series: pd.Series, index_series: pd.Series,
+            mc_yearly_ipc: pd.DataFrame, ipc_series: pd.Series, 
+            color_dict: dict = None, upper_bound: float = None, 
+            lower_bound: float = None
+        ):
+        """
+        Args:
+            uvr_series (pd.Series): contains the daily series of UVR.
+            index_series (pd.Series): contains the monthly series of the
+                IPC index.
+            mc_yearly_ipc (pd.DataFrame): contains the Np Monte Carlo
+                simulations of the yearly IPC change rate.
+            ipc_series (pd.Series): contains the historical monthly
+                behavior of the IPC yearly change.
+            color_dict (dict, optional): dictionary that maps the colors
+                to the plotted lines in the visualization methods. It 
+                should contain the following keys:
+
+                - hist: historical data line
+                - mean: mean of the simulated paths
+                - min: minimum value of each simulated step
+                - max: maximum value of each simulated step
+                - perc_95: 95th percentile of each simulated step
+                - perc_5: 5th percentile of each simulated step
+                - hist_min: minimum historical value
+                - hist_max: maximum historical value
+                
+                Defaults to None.
+            upper_bound (float, optional): upper bound value for the
+                simulations.
+            lower_bound (float, optional): lower bound value for the
+                simulations.
+        """
+        uvr_series = uvr_series.dropna()
+        monthly_uvr = uvr_series.groupby(pd.Grouper(freq='M')).last()
+        self.uvr_2w_series = uvr_series[
+            (uvr_series.index.day == 15) |
+            (uvr_series.index.isin(list(monthly_uvr.index)))
+        ]
+        self.index_series = index_series.dropna()
+        self.ipc_series = ipc_series.dropna()
+        self.mc_yearly_ipc = mc_yearly_ipc.dropna()
+
+        super().__init__(
+            series = monthly_uvr,
+            color_dict = color_dict,
+            upper_bound = upper_bound,
+            lower_bound = lower_bound
+        )
+
+    def simulate_df(self) -> pd.DataFrame:
+        """Simulates the behavior of the UVR, using the Monte Carlo
+        simulations of the yearly IPC applied to the IPC index series to
+        obtain the monthly inflation rate. With the monthly inflation
+        rate, and using the UVR formula defined by the BanRep, compute
+        the Monte Carlo behavior of the UVR.
+
+        Returns:
+            pd.DataFrame: Monte Carlo simulations of the UVR rate.
+        """
+        # Compute the monthly inflation rate:
+        index_df = pd.DataFrame(
+            data = np.tile(self.index_series, (1000, 1)).T,
+            index = self.index_series.index
+        )
+        for date in self.mc_yearly_ipc.index[:-1]:
+            index_df.loc[date, :] = 0
+            vals = (
+                (self.mc_yearly_ipc.loc[date, :].values/100 + 1) *
+                index_df.shift(12).loc[date, :].values
+            )
+            index_df.loc[date, :] = vals
+        self.index_df = index_df
+        monthly_ipc = index_df.pct_change().dropna()
+        monthly_ipc = monthly_ipc.loc[self.index_series.index[-2]:, :].round(4)
+        self.monthly_ipc = monthly_ipc * 100
+
+        # Compute the Monte Carlo paths of the UVR:
+        monthly_uvr_df = pd.DataFrame(
+            data = np.tile(self.series, (1000, 1)).T,
+            index = self.series.index
+        )
+
+        # Compute first forecast 15th day UVR:
+        date = self.series.index[-1]
+        ref_date = last_day_month(date - relativedelta(months=1))
+        end_date = date + relativedelta(days=15)
+        start_date = end_date - relativedelta(months=1)
+        start_uvr = self.uvr_2w_series[start_date]
+        uvr_15 = (
+            start_uvr * (1 + monthly_ipc.loc[ref_date, :].values)
+            ).round(4)
+        print(f"UVR 15 = {uvr_15[0]} || IPC = {monthly_ipc.loc[ref_date, 0]}")
+
+        for date in monthly_ipc.index[2:]:
+            end_date = date + relativedelta(days=15)
+            start_date = end_date - relativedelta(months=1)
+            ref_date = last_day_month(date - relativedelta(months=1))
+
+            # Last day UVR:
+            t = (date - start_date).days
+            d = (end_date - start_date).days
+            e = t/d
+            ipc = monthly_ipc.loc[ref_date, :].values
+            last_uvr = uvr_15 * (1 + ipc) ** e
+
+            monthly_uvr_df.loc[date, :] = last_uvr.round(4)
+
+            # 15th day UVR:
+            uvr_15 = (uvr_15 * (1 + ipc)).round(4)
+
+        return monthly_uvr_df.loc[self.series.index[-1]:, :]
+
+    def plot_simulations(self, n_sims: int = 8, rows: int = 2, cols: int = 4,
+                         **layout_dict) -> plotly.graph_objs.Figure:
+        """Plots in subplots different simulation paths.
+
+        Args:
+            n_sims (int, optional): number of simulations ploted. 
+                Defaults to 8.
+            rows (int, optional): number of rows in the subplot. 
+                Defaults to 2.
+            cols (int, optional): number of columns in the subplot. 
+                Defaults to 4.
+
+        Returns:
+            plotly.graph_objs._figure.Figure: Plotly figure with the 
+                data of the plot.
+        """
+        sims = list(np.random.randint(0, 999, size=n_sims))
+        uvr_12m_var = self.full_df.pct_change(periods=12)
+        uvr_12m_var = uvr_12m_var.loc[self.series.index[-1]:, sims] * 100
+        hist_12m_var = self.series.pct_change(periods=12).dropna() * 100
+        pred_mc_sims = self.mc_yearly_ipc.loc[:, sims]
+        fig = plot_simulations_with_pred_var(
+            series = hist_12m_var,
+            pred_series = self.ipc_series, 
+            sim_df = uvr_12m_var,
+            pred_sim_df = pred_mc_sims,
+            color_dict = self.COLORS,
+            rows = rows,
+            cols = cols,
+            **layout_dict    
+        )
+        return fig
 
 
 
