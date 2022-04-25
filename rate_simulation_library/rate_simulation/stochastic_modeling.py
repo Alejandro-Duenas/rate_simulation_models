@@ -1059,7 +1059,6 @@ class UVRStochasticModel(RateSeriesSimulation):
         uvr_15 = (
             start_uvr * (1 + monthly_ipc.loc[ref_date, :].values)
             ).round(4)
-        print(f"UVR 15 = {uvr_15[0]} || IPC = {monthly_ipc.loc[ref_date, 0]}")
 
         for date in monthly_ipc.index[2:]:
             end_date = date + relativedelta(days=15)
