@@ -474,7 +474,7 @@ class PoissonRateSeries(RateSeriesSimulation):
                 Defaults to None.
             ref_date (Union[str, datetime.datetime], optional): initial
                 date of analysis to compute the parameter of the model.
-                Defaults to '2011-01-01'.
+                Defaults to '2008-01-01'.
             p (int, optional): number of AR lags for the ARIMA model.
                 Defaults to 4.
             q (int, optional): number of MA lags for ARIMA model. 
@@ -539,7 +539,7 @@ class PoissonRateSeries(RateSeriesSimulation):
         jump_sim = 1 + (-rnd/self.lmbda).round(0).cumsum(axis=0)
         jump_sim = np.where(jump_sim > 61, np.NaN, jump_sim)
         jump_sim = pd.DataFrame(data=jump_sim).fillna(method='ffill')
-        #jump_sim = jump_sim.fillna(0)
+        jump_sim = jump_sim.fillna(0)
         jump_sim = jump_sim.astype(int)
 
         # Include Poisson jumps into Monte Carlo ARIMA:
@@ -714,10 +714,11 @@ class VARModelSeries(GBMRateSeries):
   
         # Define and train the model:
         model = VAR(transformed_series)
-        model_fit = model.fit(maxlags=max(self.lags)) 
+        model_fit = model.fit(maxlags=max(self.lags))
+        self.model = model_fit 
         self.var_summary = model_fit.summary()
         self.params = model_fit.params[self.target_name]
-        # std_error = model_fit.resid[self.target_name].std()
+        std_error = model_fit.resid[self.target_name].std()
 
         # Generate the Monte Carlo simulations:
         last_date = transformed_series.index[-1]
@@ -740,7 +741,7 @@ class VARModelSeries(GBMRateSeries):
                     mc_df = trans_pred_forc_df,
                     target_df = mc_forecast,
                     params = self.params
-                ) #+ np.random.normal(scale=std_error, size=(1000,))
+                ) + np.random.normal(scale=std_error, size=(1, 1000))
             )
         mc_forecast = mc_forecast.loc[self.series.index[-1]:, :]
         mc_forecast = self.trans_parameters[1]/(1+np.exp(-mc_forecast))
@@ -1059,7 +1060,7 @@ class UVRStochasticModel(RateSeriesSimulation):
         uvr_15 = (
             start_uvr * (1 + monthly_ipc.loc[ref_date, :].values)
             ).round(4)
-        print(f"UVR 15 = {uvr_15[0]} || IPC = {monthly_ipc.loc[ref_date, 0]}")
+        # print(f"UVR 15 = {uvr_15[0]} || IPC = {monthly_ipc.loc[ref_date, 0]}")
 
         for date in monthly_ipc.index[2:]:
             end_date = date + relativedelta(days=15)

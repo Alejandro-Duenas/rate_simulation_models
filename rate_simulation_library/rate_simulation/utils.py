@@ -13,7 +13,12 @@ import plotly
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from dateutil.relativedelta import relativedelta
+
+#-------------------------- Global Variables ----------------------------------
+FRED_KEY = "7b8d5df532fc2c51afd6579e63e52cdd"
+
 #----------------------- Complementary Funcitons ------------------------------
+# 1. Grouping functions:
 def quant_5(x: np.array)->float:
     """From an array returns the 5th percentile
 
@@ -35,6 +40,9 @@ def quant_95(x: np.array)->float:
         float: 95th percentile value from the array of floats
     """
     return x.quantile(0.95)
+
+
+# 2. Miscellaneous functions:
 
 def prop_label(x:Union[float, int])->float:
     """Takes a specific proportion of the input value. This function is
@@ -67,6 +75,9 @@ def jump_class(x: Union[float, int])->int:
 def last_day_month(date):
     nd = date.replace(day=1) + relativedelta(months=1) - relativedelta(days=1)
     return nd
+
+
+# 3. Plot functions:
 
 def plotly_plot(
         hist_series: Union[pd.DataFrame, pd.Series], 
@@ -344,8 +355,102 @@ def plot_simulations_with_pred_var(
     fig.update_layout(**layout_dict)
 
     return fig
-            
 
+
+# 4. Time series functions:
+
+def series_to_sequence(
+        data: np.ndarray,
+        window_size: int = 6, 
+        test_split: float = 0.3
+    ) -> tuple:
+    """This function transforms series of historical or sequential
+    data into an ordered sequence of sequences. The output contains a
+    sequence of sequences of size equal to window_size. The input data 
+    is also divided into train and test datasets so that the last
+    train_test_split proportion of data is part of the test dataset.
+
+    Args:
+        data (np.ndarray): array-like
+            data structure with the series of reshaped data.
+        window_size (int, optional): size of the sequence window. 
+            Defaults to 6.
+        test_split (float, optional): proportion of the tail of the 
+            input data that is assigned as the test dataset. Defaults to
+            0.3 (30%). 
+
+    Returns:
+        tuple: tuple of arrays (x_train, y_train, x_test, y_test)
+        
+            - x_train: np.ndarray with the predictive variables. Its
+                shape is 
+                ((data.shape[0] - window_size) * (1 - test_split), 
+                # of variables).
+
+            - y_train: np.array with the target variables. Its shape is
+                ((data.shape[0] - window_size) * (1 - test_split), 
+                # of variables).
+            
+            - x_test: np.ndarray with the test predictive variables.
+
+            - y_test: np.ndarray with the test target variables.  
+    """
+    data = data.values
+    if len(data.shape) == 1:
+        data = data.reshape(-1, 1)
+    
+    # Create the sequence of window_size sized sequences:
+    data_t = []
+    for index in range(len(data) - window_size):
+        data_t.append(data[index: index + window_size + 1])
+    
+    # Convert list of sequences into array:
+    data_t = np.array(data_t)
+
+    # Train-test split:
+    split = int(data_t.shape[0] * (1 - test_split))
+    x_train = data_t[:split, :-1, :]
+    y_train = data_t[:split, -1, :]
+    x_test = data_t[split:, :-1, :]
+    y_test = data_t[split:, -1, :]
+
+    return (x_train, y_train, x_test, y_test)
+
+def series_to_table(
+        data: np.ndarray,
+        lags: int = 6,
+        test_split: float = 0.3
+    )-> tuple:
+    """Converts an array of serial values to a concatenated array where
+    the additional columns are the lags of that values.
+
+    Args:
+        data (np.ndarray): array with the series data.
+        lags (int, optional): number of lags. Defaults to 6.
+        test_split (float, optional): proportion of the test dataset.
+             Defaults to 0.3.
+
+    Returns:
+        tuple: tuple of arrays with x_train, y_train, x_test, y_test.
+    """
+    # Define varibles:
+    n_vars = data.shape[1]
+
+    # Concatenate series data with lags:
+    data = pd.concat([data.shift(i) for i in range(lags+1)], axis=1)
+    data = data.dropna().values
+
+    # Train-test split:
+    split = int(data.shape[0] * (1 - test_split))
+    x_train = data[:split, n_vars:]
+    y_train = data[:split, :n_vars]
+    x_test = data[split:, n_vars:]
+    y_test = data[split:, :n_vars]
+
+    return (x_train, y_train, x_test, y_test)      
+
+
+# Plotting unused functions:
     # def plot_full_series(
     #     self, start: Union[str, datetime.datetime], 
     #     end: Union[str, datetime.datetime], figsize: tuple=(15,10),
