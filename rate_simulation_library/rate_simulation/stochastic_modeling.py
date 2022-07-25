@@ -6,18 +6,11 @@ the Geometric Brownian Motion Monte Carlo simulation.
 '''
 
 # ------------------------1. Libraries----------------------------------
-from calendar import month
 import numpy as np
-from numpy.random.mtrand import pareto
 import pandas as pd
-from matplotlib import pyplot as plt
-from scipy.stats.morestats import Mean
-import matplotlib.dates as mdates
-from matplotlib.dates import DateFormatter
 from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.api import VAR
 from dateutil.relativedelta import relativedelta
-import datetime
 from typing import Union
 from .utils import *
 
@@ -41,7 +34,7 @@ class GBM(object):
                 from which the rest of the process will be simulated. It
                 is usually the last observed value.
             mu (float): mean or shift of the GBM.
-            sigma (float): stadard devation or volatility of the GBM.
+            sigma (float): standard deviation or volatility of the GBM.
             Np (int, optional): number of paths that will be simulated. 
                 Defaults to 1000.
             T (int, optional): number of periods (based on the time unit
@@ -110,13 +103,15 @@ class RateSeriesSimulation(object):
     def __init__(
             self, series: Union[pd.DataFrame, pd.Series], Np: int=1000, 
             Nt: int=60, T: int=60, color_dict: dict=None,
-            upper_bound: float=None, lower_bound: float=None
-        ):
+            upper_bound: float=None, lower_bound: float=None,
+            prev_month_sim_path: str=None, hist_begin_year='2011',
+            forecast_end_year='2025'
+            ):
         """
         Args:
             series (Union[pd.DataFrame, pd.Series]): contains the data 
                 of the series that will be modeled.
-            Np (int, optional): number of paths simlated. Defaults to 
+            Np (int, optional): number of paths simulated. Defaults to 
                 1000.
             Nt (int, optional): number of time steps simulated. Defaults
                 to 60.
@@ -140,6 +135,15 @@ class RateSeriesSimulation(object):
                 simulations.
             lower_bound (float, optional): lower bound value for the
                 simulations.
+            prev_month_sim_path (string, optional): path to the results 
+                of the previous simulation results. This is used to plot
+                the comparison between the current month results and the
+                previous month results. The file pointed by the path
+                must be CSV.
+            hist_begin_year (str): beginning year of the historical data
+                to be plotted. Defaults to '2011'.
+            forecast_end_year (str): final year of the forecasted data
+                to be plotted. Defaults to '2025'.
 
         Returns:
             RateSeriesSimulation: instance of the RateSeriesSimulation
@@ -167,7 +171,22 @@ class RateSeriesSimulation(object):
         self.T = T
         self.upper_bound = upper_bound
         self.lower_bound = lower_bound
-        self.simulated_df = self.simulate_df()
+        self.prev_month_sim_path = prev_month_sim_path
+        self.hist_begin_year = hist_begin_year
+        self.forecast_end_year = forecast_end_year
+        simulated_df = self.simulate_df()
+        vals = np.where(
+            simulated_df.values < 0, 
+            0,
+            simulated_df.values
+        )
+        self.simulated_df = pd.DataFrame(
+            index = simulated_df.index,
+            columns = simulated_df.columns,
+            data = vals
+        )
+
+
     
     def __str__(self):
         name = f'{self.series.name}: Np = {self.Np} | Nt = {self.Nt}'
@@ -253,7 +272,7 @@ class RateSeriesSimulation(object):
             pd.DataFrame: dataframe with the variations of each Np paths
                 for the time delta inputed.
         """
-        var_forecast = self.full_df-self.full_df.shift(delta_t)
+        var_forecast = self.full_df - self.full_df.shift(delta_t)
         init_date = self.series.index.max()
         var_forecast = var_forecast.loc[init_date:]
 
@@ -268,10 +287,20 @@ class RateSeriesSimulation(object):
             plotly.graph_objs._figure.Figure: figure with the plot
                 information.
         """
-        mc_agg_df = self.aggregate_simulations(self.simulated_df)
-        fig = plotly_plot(
-            hist_series = self.series,
-            mc_agg_df = mc_agg_df,
+        t0_date = self.series.iloc[:-1].index.max()
+        mc_agg_df_t0 = pd.read_csv(
+            self.prev_month_sim_path,
+            parse_dates = [0],
+            index_col = 0
+            ).loc[t0_date:, :]
+        if mc_agg_df_t0.values.max() < 1:
+            mc_agg_df_t0 = mc_agg_df_t0 * 100
+        mc_agg_df_t0 = self.aggregate_simulations(mc_agg_df_t0)
+        mc_agg_df_t1 = self.aggregate_simulations(self.simulated_df)
+        fig = plotly_plot_comp(
+            hist_series = self.series[self.hist_begin_year:],
+            mc_agg_df_t0 = mc_agg_df_t0.loc[:self.forecast_end_year, :],
+            mc_agg_df_t1 = mc_agg_df_t1.loc[:self.forecast_end_year],
             color_dict = self.COLORS,
             **layout_dict
         )
@@ -279,7 +308,7 @@ class RateSeriesSimulation(object):
     
     def plot_variations(self, delta_t: int =1,
                         **layout_dict) -> plotly.graph_objs.Figure:
-        """Plots the historical behavior of the analized series variations plus
+        """Plots the historical behavior of the analyzed series variations plus
         its Monte Carlo simulation forecast variations.
 
         Args:
@@ -295,8 +324,8 @@ class RateSeriesSimulation(object):
 
         var_mc_agg_df = self.aggregate_simulations(var_mc)
         fig = plotly_plot(
-            hist_series = var_series,
-            mc_agg_df = var_mc_agg_df,
+            hist_series = var_series[self.hist_begin_year:],
+            mc_agg_df = var_mc_agg_df[:self.forecast_end_year],
             color_dict = self.COLORS,
             **layout_dict
         )
@@ -321,8 +350,8 @@ class RateSeriesSimulation(object):
         sims = list(np.random.randint(0, 999, size=n_sims))
         mc_sims = self.simulated_df.iloc[:, sims]
         fig = plot_simulations(
-            series = self.series, 
-            sim_df = mc_sims,
+            series = self.series[self.hist_begin_year:], 
+            sim_df = mc_sims.loc[:self.forecast_end_year],
             color_dict = self.COLORS,
             rows = rows,
             cols = cols,
@@ -336,19 +365,21 @@ class RateSeriesSimulation(object):
 class GBMRateSeries(RateSeriesSimulation):
     """This class stores a rate series, its statistical information
     and with it generates GBM simulations of the rate series. It also 
-    has methods to plot historical behaviour plus its variations.
+    has methods to plot historical behavior and its variations.
     """
 
     def __init__(
-        self, series: Union[pd.DataFrame, pd.Series], Np: int=1000, 
-        Nt: int=60, T: int=60, color_dict: dict=None, 
-        upper_bound: float=None, lower_bound: float=None
+            self, series: Union[pd.DataFrame, pd.Series], Np: int=1000, 
+            Nt: int=60, T: int=60, color_dict: dict=None, 
+            upper_bound: float=None, lower_bound: float=None,
+            prev_month_sim_path: str=None, hist_begin_year='2011',
+            forecast_end_year='2025'
         ):
         """
         Args:
             series (Union[pd.DataFrame, pd.Series]): contains the data 
                 of the series that will be modeled.
-            Np (int, optional): number of paths simlated. Defaults to 
+            Np (int, optional): number of paths simulated. Defaults to 
                 1000.
             Nt (int, optional): number of time steps simulated. Defaults
                 to 60.
@@ -372,6 +403,15 @@ class GBMRateSeries(RateSeriesSimulation):
                 simulations.
             lower_bound (float, optional): lower bound value for the
                 simulations.
+            prev_month_sim_path (string, optional): path to the results 
+                of the previous simulation results. This is used to plot
+                the comparison between the current month results and the
+                previous month results. The file pointed by the path
+                must be CSV.
+            hist_begin_year (str): beginning year of the historical data
+                to be plotted. Defaults to '2011'.
+            forecast_end_year (str): final year of the forecasted data
+                to be plotted. Defaults to '2025'.
 
         Returns:
             RateSeriesSimulation: instance of the RateSeriesSimulation
@@ -391,7 +431,10 @@ class GBMRateSeries(RateSeriesSimulation):
             T = T, 
             color_dict = color_dict, 
             upper_bound = upper_bound,
-            lower_bound = lower_bound
+            lower_bound = lower_bound,
+            prev_month_sim_path = prev_month_sim_path,
+            hist_begin_year = hist_begin_year,
+            forecast_end_year = forecast_end_year
             )
         self._series_type = 'GBM Process'
 
@@ -438,21 +481,22 @@ class GBMRateSeries(RateSeriesSimulation):
 
 class PoissonRateSeries(RateSeriesSimulation):
     """This object stores a rate series (expected as the policy rate of
-    a central bank), its statitical information, and with it, generates
-    a simulation of the rate with a combinaiton of an ARIMA and a 
+    a central bank), its statical information, and with it, generates
+    a simulation of the rate with a combination of an ARIMA and a 
     Poisson process jump model, to simulate the process by which the
     rate jumps.
     """
     def __init__(
-        self, series: pd.Series, Np: int=1000, Nt: int=60, T: int=60, 
-        color_dict: dict=None, 
-        ref_date: Union[str, datetime.datetime]='2008-01-01',
-        p: int=4, q: int=4, i: int=0):
+            self, series: pd.Series, Np: int=1000, Nt: int=60, T: int=60, 
+            color_dict: dict=None, 
+            ref_date: Union[str, datetime]='2008-01-01',
+            p: int=4, q: int=4, i: int=0, prev_month_sim_path: str=None,
+            hist_begin_year='2011', forecast_end_year='2025'):
         """
         Args:
             series (pd.Series): contains the data of the series that
                 will be modeled.
-            Np (int, optional): number of paths {simlated. Defaults to 
+            Np (int, optional): number of paths simulated. Defaults to 
                 1000.
             Nt (int, optional): number of time steps simulated. Defaults
                 to 60.
@@ -472,15 +516,24 @@ class PoissonRateSeries(RateSeriesSimulation):
                 - hist_max: maximum historical value
                                                                                                 
                 Defaults to None.
-            ref_date (Union[str, datetime.datetime], optional): initial
+            ref_date (Union[str, datetime], optional): initial
                 date of analysis to compute the parameter of the model.
-                Defaults to '2011-01-01'.
+                Defaults to '2008-01-01'.
             p (int, optional): number of AR lags for the ARIMA model.
                 Defaults to 4.
             q (int, optional): number of MA lags for ARIMA model. 
                 Defaults to 4.
             i (int, optional): order of integration in the series for
                 the ARIMA model. Defaults to 0.
+            prev_month_sim_path (string, optional): path to the results 
+                of the previous simulation results. This is used to plot
+                the comparison between the current month results and the
+                previous month results. The file pointed by the path
+                must be CSV.
+            hist_begin_year (str): beginning year of the historical data
+                to be plotted. Defaults to '2011'.
+            forecast_end_year (str): final year of the forecasted data
+                to be plotted. Defaults to '2025'
         """
         
         self.p = p
@@ -491,7 +544,12 @@ class PoissonRateSeries(RateSeriesSimulation):
         self.jump_series = self.jump_series[ref_date:]
         self.series = series[ref_date:]
 
-        RateSeriesSimulation.__init__(self, self.series, Np, Nt, T, color_dict)
+        RateSeriesSimulation.__init__(
+            self, self.series, Np, Nt, T, color_dict,
+            prev_month_sim_path=prev_month_sim_path, 
+            hist_begin_year=hist_begin_year, 
+            forecast_end_year=forecast_end_year
+        )
 
         self.series = self.series * 100
         arima_rep = f'ARIMA({self.p}, {self.i}, {self.q})'
@@ -539,7 +597,7 @@ class PoissonRateSeries(RateSeriesSimulation):
         jump_sim = 1 + (-rnd/self.lmbda).round(0).cumsum(axis=0)
         jump_sim = np.where(jump_sim > 61, np.NaN, jump_sim)
         jump_sim = pd.DataFrame(data=jump_sim).fillna(method='ffill')
-        #jump_sim = jump_sim.fillna(0)
+        jump_sim = jump_sim.fillna(0)
         jump_sim = jump_sim.astype(int)
 
         # Include Poisson jumps into Monte Carlo ARIMA:
@@ -570,6 +628,7 @@ class PoissonRateSeries(RateSeriesSimulation):
         """
         agg_df = RateSeriesSimulation.aggregate_simulations(df, axis=axis)
         agg_df = np.round(agg_df*4, 0)/4
+
         return agg_df
 
     def simulate_df(self)->pd.DataFrame:
@@ -627,31 +686,34 @@ class VARModelSeries(GBMRateSeries):
     """
 
     def __init__(
-        self, df: pd.DataFrame,
-        predictive_forecast_df: pd.DataFrame,
-        target_name: str,
-        predictive_name: str = 'TIBR',
-        Np: int = 1000,
-        Nt: int = 60, 
-        T: int = 60,
-        color_dict: dict = None,
-        lags: Union[tuple, list] = (1, 2), 
-        transformation_parameters: Union[list, tuple] = (0.15, 1)
-        ):
+            self, df: pd.DataFrame,
+            predictive_forecast_df: pd.DataFrame,
+            target_name: str,
+            predictive_name: str = 'TIBR',
+            Np: int = 1000,
+            Nt: int = 60, 
+            T: int = 60,
+            color_dict: dict = None,
+            lags: Union[tuple, list] = (1, 2), 
+            transformation_parameters: Union[list, tuple] = (0.15, 1),
+            prev_month_sim_path: str=None,
+            hist_begin_year='2011',
+            forecast_end_year='2025'
+            ):
         """
         Args:
             df (pd.DataFrame): contains as columns the historical values
-                of the target series and its complementary preditive
+                of the target series and its complementary predictive
                 series.
             predictive_forecast_df (pd.DataFrame): contains the
-                forecsted values of the preditive rate series, which is
+                forecasted values of the predictive rate series, which is
                 the basis, with the estimated VAR parameters, to
                 forecast 
             target_name (str): name of the target variable of the VAR 
                 model.
             predictive_name (str, optional): name of the predictive
                 variable. Defaults to 'TIBR'.
-             Np (int, optional): number of paths simlated. Defaults to 
+            Np (int, optional): number of paths simulated. Defaults to 
                 1000.
             Nt (int, optional): number of time steps simulated. Defaults
                 to 60.
@@ -677,10 +739,19 @@ class VARModelSeries(GBMRateSeries):
                 second for the predictive variable. 
                 Defaults to ((1,1),(2,2)).
             transformation_parameters (Union[list, tuple], optional):
-                values in the nominator of the sigmoid tranformation of 
+                values in the nominator of the sigmoid transformation of 
                 the rates. It is expected to have the parameters of 
                 transformation ordered as (predictive, target). Defaults
                 to (0.15, 1).
+            prev_month_sim_path (string, optional): path to the results 
+                of the previous simulation results. This is used to plot
+                the comparison between the current month results and the
+                previous month results. The file pointed by the path
+                must be CSV.
+            hist_begin_year (str): beginning year of the historical data
+                to be plotted. Defaults to '2011'.
+            forecast_end_year (str): final year of the forecasted data
+                to be plotted. Defaults to '2025'.
         """
         names = [predictive_name, target_name]
         self.lags = lags
@@ -696,7 +767,10 @@ class VARModelSeries(GBMRateSeries):
             Np = Np,
             Nt = Nt,
             T = T,
-            color_dict = color_dict
+            color_dict = color_dict,
+            prev_month_sim_path = prev_month_sim_path,
+            hist_begin_year =  hist_begin_year,
+            forecast_end_year = forecast_end_year
         )
         self.series = df[target_name] * 100
         self.pred_series = df[predictive_name] * 100
@@ -714,10 +788,11 @@ class VARModelSeries(GBMRateSeries):
   
         # Define and train the model:
         model = VAR(transformed_series)
-        model_fit = model.fit(maxlags=max(self.lags)) 
+        model_fit = model.fit(maxlags=max(self.lags))
+        self.model = model_fit 
         self.var_summary = model_fit.summary()
         self.params = model_fit.params[self.target_name]
-        # std_error = model_fit.resid[self.target_name].std()
+        std_error = model_fit.resid[self.target_name].std()
 
         # Generate the Monte Carlo simulations:
         last_date = transformed_series.index[-1]
@@ -740,7 +815,7 @@ class VARModelSeries(GBMRateSeries):
                     mc_df = trans_pred_forc_df,
                     target_df = mc_forecast,
                     params = self.params
-                ) #+ np.random.normal(scale=std_error, size=(1000,))
+                ) + np.random.normal(scale=std_error, size=(1, 1000))
             )
         mc_forecast = mc_forecast.loc[self.series.index[-1]:, :]
         mc_forecast = self.trans_parameters[1]/(1+np.exp(-mc_forecast))
@@ -806,10 +881,10 @@ class VARModelSeries(GBMRateSeries):
         pred_mc_sims = pred_mc_sims.loc[last_date:, :]
 
         fig = plot_simulations_with_pred_var(
-            series = self.series,
-            pred_series = self.pred_series, 
-            sim_df = mc_sims,
-            pred_sim_df = pred_mc_sims,
+            series = self.series['2011':],
+            pred_series = self.pred_series['2011':], 
+            sim_df = mc_sims[:'2025'],
+            pred_sim_df = pred_mc_sims[:'2025'],
             color_dict = self.COLORS,
             rows = rows,
             cols = cols,
@@ -829,8 +904,10 @@ class RandomVariationSeriesSimulation(RateSeriesSimulation):
             mc_reference_df: pd.DataFrame, 
             reference_rate_series: pd.Series, Np: int = 1000, Nt: int = 60, 
             T: int = 60, color_dict: dict = None, upper_bound: float = None, 
-            lower_bound: float = None, variation_type: str = 'sum'
-        ):
+            lower_bound: float = None, variation_type: str = 'sum',
+            prev_month_sim_path: str=None, hist_begin_year='2011',
+            forecast_end_year='2025'
+            ):
         """
         Args:
             series (Union[pd.DataFrame, pd.Series]): contains the data
@@ -839,7 +916,7 @@ class RandomVariationSeriesSimulation(RateSeriesSimulation):
                 and Monte Carlo simulations of the reference rate. From
                 this data frame the object computes the monthly
                 variations that are applied to the reference rate.
-            Np (int, optional): number of paths simlated. Defaults to 
+            Np (int, optional): number of paths simulated. Defaults to 
                 1000.
             Nt (int, optional): number of time steps simulated. Defaults
                 to 60.
@@ -866,7 +943,7 @@ class RandomVariationSeriesSimulation(RateSeriesSimulation):
             variation_type (str, 'multiplication', 'sum'): defines how
                 the variations are computed. 
                 
-                - 'multiplication': the porcentual variation is computed
+                - 'multiplication': the percentage change is computed
                   and then is multiplied with the last value of the 
                   modeled rate.
 
@@ -874,6 +951,15 @@ class RandomVariationSeriesSimulation(RateSeriesSimulation):
                   the modeled rate.
 
                 Defaults to 'sum'.
+            prev_month_sim_path (string, optional): path to the results 
+                of the previous simulation results. This is used to plot
+                the comparison between the current month results and the
+                previous month results. The file pointed by the path
+                must be CSV.
+            hist_begin_year (str): beginning year of the historical data
+                to be plotted. Defaults to '2011'.
+            forecast_end_year (str): final year of the forecasted data
+                to be plotted. Defaults to '2025'.
         """
         variation_type = variation_type.lower()
         var_types = ('multiplication', 'sum')
@@ -892,18 +978,21 @@ class RandomVariationSeriesSimulation(RateSeriesSimulation):
             T = T,
             color_dict = color_dict,
             upper_bound = upper_bound,
-            lower_bound = lower_bound
+            lower_bound = lower_bound,
+            prev_month_sim_path = prev_month_sim_path,
+            hist_begin_year =  hist_begin_year,
+            forecast_end_year = forecast_end_year
         )
         self.series = self.series*100
         
     def simulate_df(self) -> pd.DataFrame:
         """With the mc_reference_df attribute, computes the 1 period
         variation and then applies that variation to the modeled rate.
-        How this is done is deternmined by the 'variation_type'
+        How this is done is determined by the 'variation_type'
         attribute.
 
         Returns:
-            pd.DataFrame: contains the simulated paths of the modeles
+            pd.DataFrame: contains the simulated paths of the models
                 rate.
         """
         last_observed_date = self.series.index[-1]
@@ -934,7 +1023,7 @@ class RandomVariationSeriesSimulation(RateSeriesSimulation):
         """Plots in subplots different simulation paths.
 
         Args:
-            n_sims (int, optional): number of simulations ploted. 
+            n_sims (int, optional): number of simulations plotted. 
                 Defaults to 8.
             rows (int, optional): number of rows in the subplot. 
                 Defaults to 2.
@@ -949,10 +1038,10 @@ class RandomVariationSeriesSimulation(RateSeriesSimulation):
         mc_sims = self.simulated_df.iloc[:, sims]
         pred_mc_sims = (self.mc_reference_df * 100).iloc[:, sims]
         fig = plot_simulations_with_pred_var(
-            series = self.series,
-            pred_series = self.reference_rate_series, 
-            sim_df = mc_sims,
-            pred_sim_df = pred_mc_sims,
+            series = self.series['2011':],
+            pred_series = self.reference_rate_series['2011':], 
+            sim_df = mc_sims[:'2025'],
+            pred_sim_df = pred_mc_sims[:'2025'],
             color_dict = self.COLORS,
             rows = rows,
             cols = cols,
@@ -970,8 +1059,9 @@ class UVRStochasticModel(RateSeriesSimulation):
             self, uvr_series: pd.Series, index_series: pd.Series,
             mc_yearly_ipc: pd.DataFrame, ipc_series: pd.Series, 
             color_dict: dict = None, upper_bound: float = None, 
-            lower_bound: float = None
-        ):
+            lower_bound: float = None, prev_month_sim_path: str=None, 
+            hist_begin_year='2011',forecast_end_year='2025'
+            ):
         """
         Args:
             uvr_series (pd.Series): contains the daily series of UVR.
@@ -999,6 +1089,15 @@ class UVRStochasticModel(RateSeriesSimulation):
                 simulations.
             lower_bound (float, optional): lower bound value for the
                 simulations.
+            prev_month_sim_path (string, optional): path to the results 
+                of the previous simulation results. This is used to plot
+                the comparison between the current month results and the
+                previous month results. The file pointed by the path
+                must be CSV.
+            hist_begin_year (str): beginning year of the historical data
+                to be plotted. Defaults to '2011'.
+            forecast_end_year (str): final year of the forecasted data
+                to be plotted. Defaults to '2025'.
         """
         uvr_series = uvr_series.dropna()
         monthly_uvr = uvr_series.groupby(pd.Grouper(freq='M')).last()
@@ -1014,7 +1113,10 @@ class UVRStochasticModel(RateSeriesSimulation):
             series = monthly_uvr,
             color_dict = color_dict,
             upper_bound = upper_bound,
-            lower_bound = lower_bound
+            lower_bound = lower_bound,
+            prev_month_sim_path = prev_month_sim_path,
+            hist_begin_year =  hist_begin_year,
+            forecast_end_year = forecast_end_year
         )
 
     def simulate_df(self) -> pd.DataFrame:
@@ -1084,7 +1186,7 @@ class UVRStochasticModel(RateSeriesSimulation):
         """Plots in subplots different simulation paths.
 
         Args:
-            n_sims (int, optional): number of simulations ploted. 
+            n_sims (int, optional): number of simulations plotted. 
                 Defaults to 8.
             rows (int, optional): number of rows in the subplot. 
                 Defaults to 2.
@@ -1101,10 +1203,10 @@ class UVRStochasticModel(RateSeriesSimulation):
         hist_12m_var = self.series.pct_change(periods=12).dropna() * 100
         pred_mc_sims = self.mc_yearly_ipc.loc[:, sims]
         fig = plot_simulations_with_pred_var(
-            series = hist_12m_var,
-            pred_series = self.ipc_series, 
-            sim_df = uvr_12m_var,
-            pred_sim_df = pred_mc_sims,
+            series = hist_12m_var['2011':],
+            pred_series = self.ipc_series['2011':], 
+            sim_df = uvr_12m_var[:'2025'],
+            pred_sim_df = pred_mc_sims[:'2025'],
             color_dict = self.COLORS,
             rows = rows,
             cols = cols,
@@ -1112,5 +1214,35 @@ class UVRStochasticModel(RateSeriesSimulation):
         )
         return fig
 
+class RNNSeriesSimulation(RateSeriesSimulation):
+    """This class uses a recurrent neural network to forecast a rate
+    series, stores its information. It also has methods to plot
+    historical behavior and its variations.
+    """
 
+    def __init__(
+        self, data: pd.DataFrame, checkpoint_path: str, 
+        target_series: pd.Series, Np: int=1000, Nt: int=60, T: int=60, 
+        color_dict: dict=None):
+
+        self.checkpoint_path = checkpoint_path
+        # Prepare series 
+        self.series = target_series
+        self.data = data
+        self.diff_series = data.merge(target_series, left_index=True,
+                                      right_index=True)
+        self.diff_series = self.diff_series['FFR'] - self.diff_series['SOFR']
+
+        super().__init(self, self.series, Np, Nt, T, color_dict)
+
+    
+    def simulate_df(self) -> pd.DataFrame:
+        end_date = self.series.index[-1] + relativedelta(years=5)
+        str_end_date = end_date.strftime('%Y-%m-%d')
+        model, checkpoint = load_checkpoint(self.checkpoint_path)
+        ffr_forecast = generate_rnn_forecast(model, self.data, str_end_date)
+        randomness = np.random.normal(0, self.diff_series.std(), 
+                                      size=(61, 1000))
+        forecast = ffr_forecast.loc[self.series.index[-1]:, :] + randomness
+        return forecast * 100
 

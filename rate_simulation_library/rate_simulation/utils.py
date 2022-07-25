@@ -13,7 +13,101 @@ import plotly
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from dateutil.relativedelta import relativedelta
-#----------------------- Complementary Funcitons ------------------------------
+from datetime import datetime
+
+from torch import nn
+from torch import optim
+from torch.utils.data import DataLoader, TensorDataset
+import torch
+
+#-------------------------- Global Variables ----------------------------------
+FRED_KEY = "7b8d5df532fc2c51afd6579e63e52cdd"
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+#----------------------------- Classes ---------------------------------------
+class RecurrentNet(nn.Module):
+    def __init__(
+            self, input_dim: int, 
+            output_dim: int, 
+            recurrent_layer: str,
+            num_rnn_layers: int,
+            rnn_hidden_units: int,
+            dropout_bool: bool = 0,
+            dropout: float = False,
+            bn0_bool: bool = True,
+            bn1_bool: bool = True) -> nn.Module:
+        # Init parent class:
+        super().__init__()
+        layers = []
+
+        # Define hyper-parameters:
+        self.bn0_bool = bn0_bool
+        self.num_rnn_layers = num_rnn_layers
+        self.rnn_hidden_units = rnn_hidden_units
+        self.recurrent_layer = recurrent_layer
+
+        # Define layers:
+        self.bn0 = nn.BatchNorm1d(input_dim)
+        rnn_layer = getattr(nn, recurrent_layer)
+        if dropout_bool:
+            self.rnn = rnn_layer(
+                input_size = input_dim,
+                hidden_size = rnn_hidden_units,
+                num_layers = num_rnn_layers,
+                batch_first = True,
+                dropout = dropout
+            )
+        else:
+            self.rnn = rnn_layer(
+                input_size = input_dim,
+                hidden_size = rnn_hidden_units,
+                num_layers = num_rnn_layers,
+                batch_first = True
+            )
+        if bn1_bool:
+            batch_norm = nn.BatchNorm1d(rnn_hidden_units)
+            layers.append(batch_norm)
+        dense = nn.Linear(rnn_hidden_units, output_dim)
+        layers.append(dense)
+        self.dense = nn.Sequential(*layers)
+
+    def forward(self, sequence):
+        batch_size = sequence.shape[0]
+        if self.bn0_bool:
+            sequence = sequence.permute(0, 2, 1)
+            sequence = self.bn0(sequence)
+            sequence = sequence.permute(0, 2, 1)
+            
+        if self.recurrent_layer == 'LSTM':
+            (stm, ltm) = self.init_hidden(batch_size)
+            _, hidden = self.rnn(sequence, (stm.detach(), ltm.detach()))
+            stm, ltm = hidden
+            output = torch.sigmoid(self.dense(stm[-1, :, :]))
+        
+        else:
+            h_c = self.init_hidden(batch_size)
+            _, h_c = self.rnn(sequence, h_c)
+            output = torch.sigmoid(self.dense(h_c[-1, :, :]))
+
+        return output
+    
+    def init_hidden(self, batch_size):
+        """Initializes hidden state of the LSTM layers"""
+        weight = next(self.parameters()).data
+        weight = weight.new(self.num_rnn_layers, batch_size, 
+                            self.rnn_hidden_units)
+        gain = nn.init.calculate_gain('tanh')
+        stm = torch.nn.init.xavier_uniform_(weight, gain=gain).to(DEVICE)
+        
+        if self.recurrent_layer =='GRU':
+            return stm
+        else:
+            ltm = torch.nn.init.xavier_uniform_(weight, gain=gain).to(DEVICE)
+            hidden = (stm, ltm)
+            return hidden
+
+#----------------------- Complementary Functions ------------------------------
+# 1. Grouping functions:
 def quant_5(x: np.array)->float:
     """From an array returns the 5th percentile
 
@@ -35,6 +129,9 @@ def quant_95(x: np.array)->float:
         float: 95th percentile value from the array of floats
     """
     return x.quantile(0.95)
+
+
+# 2. Miscellaneous functions:
 
 def prop_label(x:Union[float, int])->float:
     """Takes a specific proportion of the input value. This function is
@@ -67,6 +164,21 @@ def jump_class(x: Union[float, int])->int:
 def last_day_month(date):
     nd = date.replace(day=1) + relativedelta(months=1) - relativedelta(days=1)
     return nd
+
+def load_checkpoint(filepath):
+    checkpoint = torch.load(filepath, map_location=torch.device('cpu'))
+    model = RecurrentNet(
+        input_dim = 2,
+        output_dim = 2,
+        recurrent_layer = checkpoint['recurrent_type'],
+        num_rnn_layers = checkpoint['num_rnn_layers'],
+        rnn_hidden_units = checkpoint['rnn_hidden_units']
+    )
+    model.load_state_dict(checkpoint['state_dict'])
+
+    return model, checkpoint
+    
+# 3. Plot functions:
 
 def plotly_plot(
         hist_series: Union[pd.DataFrame, pd.Series], 
@@ -344,8 +456,436 @@ def plot_simulations_with_pred_var(
     fig.update_layout(**layout_dict)
 
     return fig
-            
 
+def plotly_plot_comp(
+        hist_series: Union[pd.DataFrame, pd.Series], 
+        mc_agg_df_t0: pd.DataFrame,
+        mc_agg_df_t1: pd.DataFrame,
+        color_dict: dict = None,
+        **layout_dict,
+    ) -> plotly.graph_objs.Figure:
+    """This functions creates a Plotly Figure object with the historical
+    data of the input series, combined with the Monte Carlo simulations
+    of its future behavior. It also has the historical maximum value and
+    the historical minimum value of the series added to the plot.
+
+    Args:
+        hist_series (Union[pd.DataFrame, pd.Series]): historical
+            values of the plotted series.
+        mc_agg_df_t0 (pd.DataFrame): Monte Carlo simulations of the 
+            series, which is summarized by the mean, maximum, minimum, 
+            5th percentile and 95th percentile for each time step. This 
+            is for the t0 results. Its column names should be:
+
+            - 'max': for the column with the maximum value per time step
+            - 'min': for the column with the minimum value per time step
+            - 'mean': for the column with the mean value per time step
+            - 'quant_5': for the column with the 5th percentile value 
+              per time step.
+            - 'quant_95': for the column with the 95th percentile value 
+              per time step.
+        mc_agg_df_t1 (pd.DataFrame): Monte Carlo simulations of the 
+            series, which is summarized by the mean, maximum, minimum, 
+            5th percentile and 95th percentile for each time step. This 
+            is for the t1 results. Its column names should be:
+
+            - 'max': for the column with the maximum value per time step
+            - 'min': for the column with the minimum value per time step
+            - 'mean': for the column with the mean value per time step
+            - 'quant_5': for the column with the 5th percentile value 
+              per time step.
+            - 'quant_95': for the column with the 95th percentile value 
+              per time step.
+        color_dict (dict): dictionary with the colors for the plotted 
+            lines.
+
+    Returns:
+        plotly.graph_objs._figure.Figure: figure with the plot
+            information.
+    """
+    # Find historical values:
+    hist_min_t0 = hist_series.iloc[:-1].min()
+    hist_min_date_t0 = hist_series.iloc[:-1].idxmin().strftime('%b %Y')
+    hist_max_t0 = hist_series.iloc[:-1].max()
+    hist_max_date_t0 = hist_series.iloc[:-1].idxmax().strftime('%b %Y')
+
+    hist_min = hist_series.min()
+    hist_min_date = hist_series.idxmin().strftime('%b %Y')
+    hist_max = hist_series.max()
+    hist_max_date = hist_series.idxmax().strftime('%b %Y')
+
+    max_date_t0 = hist_series.iloc[:-1].index.max()
+    max_date_t1 = hist_series.index.max()
+
+    # Create Figure object:
+    titles = [max_date_t0.strftime('%b %Y'), 
+              max_date_t1.strftime('%b %Y')]
+    fig = make_subplots(rows=1, cols=2, subplot_titles=titles)
+
+    # Left plot----------------------------------------------------------------
+    fig.add_trace(
+        go.Scatter(
+            x = mc_agg_df_t0.index,
+            y = mc_agg_df_t0['max'],
+            mode = 'lines',
+            name = 'Max',
+            line = {'color': color_dict['max'], 'width': 2, 'dash': 'dot'},
+            showlegend = True,
+            legendgrouptitle_text = max_date_t0.strftime('%b %Y'),
+            legendgroup = 'prev'
+        ), 
+        row = 1,
+        col = 1
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x = mc_agg_df_t0.index,
+            y = mc_agg_df_t0['quant_95'],
+            mode = 'lines',
+            name = 'Pct.95',
+            line = {'color': color_dict['perc_95'], 'width': 2, 'dash': 'dot'},
+            legendgrouptitle_text = max_date_t0.strftime('%b %Y'),
+            legendgroup = 'prev'
+        ),
+        row = 1,
+        col = 1
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x = mc_agg_df_t0.index,
+            y = mc_agg_df_t0['mean'],
+            mode = 'lines',
+            name = 'Media',
+            line = {'color': color_dict['mean'], 'width': 2, 'dash': 'dash'},
+            legendgrouptitle_text = max_date_t0.strftime('%b %Y'),
+            legendgroup = 'prev'
+        ),
+        row = 1,
+        col = 1
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x = hist_series.loc[:max_date_t0].index,
+            y = hist_series.loc[:max_date_t0],
+            mode = 'lines',
+            name = 'Hist.',
+            line = {'color': color_dict['hist'], 'width': 2},
+            showlegend = True,
+            legendgrouptitle_text = max_date_t0.strftime('%b %Y'),
+            legendgroup = 'prev'
+        ),
+        row = 1,
+        col = 1
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x = mc_agg_df_t0.index,
+            y = mc_agg_df_t0['quant_5'],
+            mode = 'lines',
+            name = 'Pct.5',
+            line = {'color': color_dict['perc_5'], 'width': 2, 'dash': 'dot'},
+            legendgrouptitle_text = max_date_t0.strftime('%b %Y'),
+            legendgroup = 'prev'
+        ),
+        row = 1,
+        col = 1
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x = mc_agg_df_t0.index,
+            y = mc_agg_df_t0['min'],
+            mode = 'lines',
+            name = 'Min',
+            line = {'color': color_dict['min'], 'width': 2, 'dash': 'dot'},
+            legendgrouptitle_text = max_date_t0.strftime('%b %Y'),
+            legendgroup = 'prev'
+        ),
+        row = 1,
+        col = 1
+    )
+
+    fig.add_hline(
+        y = hist_max_t0,
+        line_dash = 'dashdot',
+        line_color = color_dict['hist_max'],
+        annotation = {
+            'text': hist_max_date_t0+' = '+str(round(hist_max_t0, 2)),
+            'font': {'color': color_dict['hist_max'], 'size': 13}
+        },
+        annotation_position = 'top left',
+        row = 1,
+        col = 1
+    )
+
+    fig.add_hline(
+        y = hist_min_t0,
+        line_dash = 'dashdot',
+        line_color = color_dict['hist_min'],
+        annotation = {
+            'text': hist_min_date_t0+' = '+str(round(hist_min_t0, 2)),
+            'font': {'color': color_dict['hist_min'], 'size': 13}
+        },
+        annotation_position = 'bottom left',
+        row = 1,
+        col = 1
+    )
+
+
+    # Right plot---------------------------------------------------------------
+    fig.add_trace(
+        go.Scatter(
+            x = mc_agg_df_t1.index,
+            y = mc_agg_df_t1['max'],
+            mode = 'lines',
+            name = 'Max',
+            line = {'color': color_dict['max'], 'width': 2, 'dash': 'dot'},
+            showlegend = True,
+            legendgrouptitle_text = max_date_t1.strftime('%b %Y'),
+            legendgroup = 'act'
+        ),
+        row = 1,
+        col = 2
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x = mc_agg_df_t1.index,
+            y = mc_agg_df_t1['quant_95'],
+            mode = 'lines',
+            name = 'Pct.95',
+            line = {'color': color_dict['perc_95'], 'width': 2, 'dash': 'dot'},
+            legendgrouptitle_text = max_date_t1.strftime('%b %Y'),
+            legendgroup = 'act'
+        ),
+        row = 1,
+        col = 2
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x = mc_agg_df_t1.index,
+            y = mc_agg_df_t1['mean'],
+            mode = 'lines',
+            name = 'Media',
+            line = {'color': color_dict['mean'], 'width': 2, 'dash': 'dash'},
+            legendgrouptitle_text = max_date_t1.strftime('%b %Y'),
+            legendgroup = 'act'
+        ),
+        row = 1,
+        col = 2
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x = hist_series.index,
+            y = hist_series,
+            mode = 'lines',
+            name = 'Hist.',
+            line = {'color': color_dict['hist'], 'width': 2},
+            showlegend = True,
+            legendgrouptitle_text = max_date_t1.strftime('%b %Y'),
+            legendgroup = 'act'
+        ),
+        row = 1,
+        col = 2
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x = mc_agg_df_t1.index,
+            y = mc_agg_df_t1['quant_5'],
+            mode = 'lines',
+            name = 'Pct.5',
+            line = {'color': color_dict['perc_5'], 'width': 2, 'dash': 'dot'},
+            legendgrouptitle_text = max_date_t1.strftime('%b %Y'),
+            legendgroup = 'act'
+        ),
+        row = 1,
+        col = 2
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x = mc_agg_df_t1.index,
+            y = mc_agg_df_t1['min'],
+            mode = 'lines',
+            name = 'Min',
+            line = {'color': color_dict['min'], 'width': 2, 'dash': 'dot'},
+            legendgrouptitle_text = max_date_t1.strftime('%b %Y'),
+            legendgroup = 'act'
+        ),
+        row = 1,
+        col = 2
+    )
+
+    fig.add_hline(
+        y = hist_max,
+        line_dash = 'dashdot',
+        line_color = color_dict['hist_max'],
+        annotation = {
+            'text': hist_max_date+' = '+str(round(hist_max, 2)),
+            'font': {'color': color_dict['hist_max'], 'size': 13}
+        },
+        annotation_position = 'top left',
+        row = 1,
+        col = 2
+    )
+
+    fig.add_hline(
+        y = hist_min,
+        line_dash = 'dashdot',
+        line_color = color_dict['hist_min'],
+        annotation = {
+            'text': hist_min_date+' = '+str(round(hist_min, 2)),
+            'font': {'color': color_dict['hist_min'], 'size': 13}
+        },
+        annotation_position = 'bottom left',
+        row = 1,
+        col = 2
+    )
+
+    fig.update_layout(**layout_dict)
+    return fig
+
+# 4. Time series functions:
+
+def series_to_sequence(
+        data: np.ndarray,
+        window_size: int = 6, 
+        test_split: float = 0.3
+    ) -> tuple:
+    """This function transforms series of historical or sequential
+    data into an ordered sequence of sequences. The output contains a
+    sequence of sequences of size equal to window_size. The input data 
+    is also divided into train and test datasets so that the last
+    train_test_split proportion of data is part of the test dataset.
+
+    Args:
+        data (np.ndarray): array-like
+            data structure with the series of reshaped data.
+        window_size (int, optional): size of the sequence window. 
+            Defaults to 6.
+        test_split (float, optional): proportion of the tail of the 
+            input data that is assigned as the test dataset. Defaults to
+            0.3 (30%). 
+
+    Returns:
+        tuple: tuple of arrays (x_train, y_train, x_test, y_test)
+        
+            - x_train: np.ndarray with the predictive variables. Its
+                shape is 
+                ((data.shape[0] - window_size) * (1 - test_split), 
+                # of variables).
+
+            - y_train: np.array with the target variables. Its shape is
+                ((data.shape[0] - window_size) * (1 - test_split), 
+                # of variables).
+            
+            - x_test: np.ndarray with the test predictive variables.
+
+            - y_test: np.ndarray with the test target variables.  
+    """
+    data = data.values
+    if len(data.shape) == 1:
+        data = data.reshape(-1, 1)
+    
+    # Create the sequence of window_size sized sequences:
+    data_t = []
+    for index in range(len(data) - window_size):
+        data_t.append(data[index: index + window_size + 1])
+    
+    # Convert list of sequences into array:
+    data_t = np.array(data_t)
+
+    # Train-test split:
+    split = int(data_t.shape[0] * (1 - test_split))
+    x_train = data_t[:split, :-1, :]
+    y_train = data_t[:split, -1, :]
+    x_test = data_t[split:, :-1, :]
+    y_test = data_t[split:, -1, :]
+
+    return (x_train, y_train, x_test, y_test)
+
+def series_to_table(
+        data: np.ndarray,
+        lags: int = 6,
+        test_split: float = 0.3
+    )-> tuple:
+    """Converts an array of serial values to a concatenated array where
+    the additional columns are the lags of that values.
+
+    Args:
+        data (np.ndarray): array with the series data.
+        lags (int, optional): number of lags. Defaults to 6.
+        test_split (float, optional): proportion of the test dataset.
+             Defaults to 0.3.
+
+    Returns:
+        tuple: tuple of arrays with x_train, y_train, x_test, y_test.
+    """
+    # Define varibles:
+    n_vars = data.shape[1]
+
+    # Concatenate series data with lags:
+    data = pd.concat([data.shift(i) for i in range(lags+1)], axis=1)
+    data = data.dropna().values
+
+    # Train-test split:
+    split = int(data.shape[0] * (1 - test_split))
+    x_train = data[:split, n_vars:]
+    y_train = data[:split, :n_vars]
+    x_test = data[split:, n_vars:]
+    y_test = data[split:, :n_vars]
+
+    return (x_train, y_train, x_test, y_test)      
+
+# 4. Forecast functions:
+def generate_rnn_forecast(
+        model: nn.Module,
+        hist_data_df: pd.DataFrame,
+        final_date: str,
+        time_window: int
+        ) -> pd.DataFrame:
+    """Takes a model, historical daily-data and returns a forecast that
+    until the final_date date.
+
+    Args:
+        model (nn.Module): PyTorch neural network model, with which
+            the forecast is done.
+        hist_data_df (pd.DataFrame): contains the historical sequential
+            data
+        final_date (str): "%Y-%m-%d" format, is the last date of
+            forecast
+        time_window (int): number of lags used in the model
+
+    Returns:
+        pd.DataFrame: contains the historical data and the forecast
+            at the end
+    """
+    df = hist_data_df.copy()
+    end_date = datetime.strptime(final_date, '%Y-%m-%d')
+    last_date = df.index[-1]
+    num_days = (end_date - last_date).days
+    
+    for day in range(1, num_days+1):
+        array = np.expand_dims(df.iloc[-60:].values, axis=0)
+        input_tensor = torch.tensor(array, dtype=torch.float, device=DEVICE)
+        
+        model.eval()
+        with torch.no_grad():
+            output = model(input_tensor)
+            output = output.to('cpu').numpy()[0]
+            step_date = last_date + relativedelta(days=day)
+            df.loc[step_date, :] = output
+    
+    return df
+
+# Plotting unused functions:
     # def plot_full_series(
     #     self, start: Union[str, datetime.datetime], 
     #     end: Union[str, datetime.datetime], figsize: tuple=(15,10),
